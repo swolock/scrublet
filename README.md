@@ -1,4 +1,6 @@
 # woublet
+Python 2 code for identifying doublets in single-cell RNA-seq data.  
+Alternatively, see https://github.com/swolock/scanpy for a [scanpy](https://github.com/theislab/scanpy) fork implementing this doublet detector. Example [here](./180601_doublets.ipynb).
 
 Given a raw counts matrix `E` in `scipy.sparse.csc_matrix` format, with cells as rows and genes as columns, you can calculate a doublet score for each cell with the following command: 
 ```python
