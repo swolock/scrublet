@@ -243,7 +243,7 @@ def preprocess_and_pca(E, total_counts_normalize=True, norm_exclude_abundant_gen
 
 ########## GRAPH CONSTRUCTION
 
-def get_knn_graph(X, k=5, dist_metric='euclidean', approx=False):
+def get_knn_graph(X, k=5, dist_metric='euclidean', approx=False, return_edges=True):
     '''
     Build k-nearest-neighbor graph
     Return edge list and nearest neighbor matrix
@@ -283,15 +283,17 @@ def get_knn_graph(X, k=5, dist_metric='euclidean', approx=False):
             nbrs = NearestNeighbors(n_neighbors=k, metric=dist_metric).fit(X)
         knn = nbrs.kneighbors(return_distance=False)
 
-    links = set([])
-    for i in range(knn.shape[0]):
-        for j in knn[i,:]:
-            links.add(tuple(sorted((i,j))))
+    if return_edges:
+        links = set([])
+        for i in range(knn.shape[0]):
+            for j in knn[i,:]:
+                links.add(tuple(sorted((i,j))))
 
-    t_elapse = time.time() - t0
-    print 'kNN graph built in %.3f sec' %(t_elapse)
+        t_elapse = time.time() - t0
+        print 'kNN graph built in %.3f sec' %(t_elapse)
 
-    return links, knn
+        return links, knn
+    return knn
 
 def build_adj_mat(edges, n_nodes):
     A = scipy.sparse.lil_matrix((n_nodes, n_nodes))
@@ -375,9 +377,9 @@ def darken_cmap(cmap, scale_factor):
     cdat = np.zeros((cmap.N, 4))
     for ii in range(cdat.shape[0]):
         curcol = cmap(ii)
-        cdat[ii,0] = curcol[0] * .9
-        cdat[ii,1] = curcol[1] * .9
-        cdat[ii,2] = curcol[2] * .9
+        cdat[ii,0] = curcol[0] * scale_factor
+        cdat[ii,1] = curcol[1] * scale_factor
+        cdat[ii,2] = curcol[2] * scale_factor
         cdat[ii,3] = 1
     cmap = cmap.from_list(cmap.N, cdat)
     return cmap

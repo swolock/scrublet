@@ -78,7 +78,7 @@ def calculate_doublet_scores(embedding, doub_labels, k=50, use_approx_nn=True, e
     k_adj = int(round(k * (1+n_sim/float(n_obs))))
 
     # Find k_adj nearest neighbors
-    neighbors = get_knn_graph(embedding, k=k_adj, dist_metric='euclidean', approx=use_approx_nn)[1]
+    neighbors = get_knn_graph(embedding, k=k_adj, dist_metric='euclidean', approx=use_approx_nn, return_edges = False)
     
     # Calculate doublet score based on ratio of simulated cell neighbors vs. observed cell neighbors
     n_sim_neigh = np.sum(doub_labels[neighbors] == 1, axis = 1)
@@ -116,7 +116,7 @@ def woublet(E=None, exp_doub_rate = 0.1, sim_doublet_ratio=3, k=50, use_approx_n
 
     # Run PCA if not provided
     if precomputed_pca is None:
-        PCdat = preprocess_and_pca(E, total_counts_normalize=total_counts_normalize, norm_exclude_abundant_gene_frac=norm_exclude_abundant_gene_frac, min_counts=min_counts, min_cells=min_cells, vscore_percentile=vscore_percentile, gene_filter=gene_filter, num_pc=num_pc, sparse_pca=sparse_pca)
+        PCdat,gene_filter = preprocess_and_pca(E, total_counts_normalize=total_counts_normalize, norm_exclude_abundant_gene_frac=norm_exclude_abundant_gene_frac, min_counts=min_counts, min_cells=min_cells, min_vscore_pctl=vscore_percentile, gene_filter=gene_filter, num_pc=num_pc, sparse_pca=sparse_pca)
     else:
         PCdat = precomputed_pca
 
