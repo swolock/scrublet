@@ -1,7 +1,5 @@
 annoy
-fa2
 matplotlib
-networkx
 numpy
 scikit-learn
 scipy
