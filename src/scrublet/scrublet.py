@@ -1,6 +1,4 @@
-from helper_functions import *
-
-#========================================================================================#
+from .helper_functions import *
 
 def simulate_doublets_from_counts(E, sim_doublet_ratio=1):
     '''
@@ -70,7 +68,6 @@ def simulate_doublets_from_pca(PCdat, total_counts=[], sim_doublet_ratio=1):
 #========================================================================================#
 
 def calculate_doublet_scores(embedding, doub_labels, k=50, use_approx_nn=True, exp_doub_rate = 1.0):
-    t00 = time.time()
     n_obs = sum(doub_labels == 0)
     n_sim = sum(doub_labels == 1)
 
@@ -93,11 +90,11 @@ def calculate_doublet_scores(embedding, doub_labels, k=50, use_approx_nn=True, e
 
 #========================================================================================#
 
-def woublet(E=None, exp_doub_rate = 0.1, sim_doublet_ratio=3, k=50, use_approx_nn=False, precomputed_pca=None, total_counts=None, total_counts_normalize=True, norm_exclude_abundant_gene_frac=1, min_counts=3, min_cells=5, vscore_percentile=85, gene_filter=None, num_pc=50, sparse_pca=False):
+def predict_doublets(E=None, exp_doub_rate = 0.1, sim_doublet_ratio=3, k=50, use_approx_nn=False, precomputed_pca=None, total_counts=None, total_counts_normalize=True, norm_exclude_abundant_gene_frac=1, min_counts=3, min_cells=5, vscore_percentile=85, gene_filter=None, num_pc=50, sparse_pca=False):
     
     # Check that input is valid
     if E is None and precomputed_pca is None:
-        print 'Please supply a counts matrix (E) or PCA coordinates (precomputed_pca)'
+        print('Please supply a counts matrix (E) or PCA coordinates (precomputed_pca)')
         return
     
     # Convert counts matrix to sparse format if necessary
@@ -121,11 +118,93 @@ def woublet(E=None, exp_doub_rate = 0.1, sim_doublet_ratio=3, k=50, use_approx_n
         PCdat = precomputed_pca
 
     # Simulate doublets
-    print 'Simulating doublets'
+    print('Simulating doublets')
     PCdat, doub_labels, parent_ix = simulate_doublets_from_pca(PCdat, total_counts=total_counts, sim_doublet_ratio=sim_doublet_ratio)
 
     # Calculate doublet scores using k-nearest-neighbor classifier
-    print 'Running KNN classifier'
+    print('Running KNN classifier')
     doub_score_obs, doub_score_sim = calculate_doublet_scores(PCdat, doub_labels, k=k, use_approx_nn=use_approx_nn, exp_doub_rate = exp_doub_rate)
     return doub_score_obs, doub_score_sim
 
+
+
+#========================================================================================#
+def plot_scrublet_results(coords, doublet_scores_obs, doublet_scores_sim, score_threshold, marker_size=5, order_points=False):
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    # Adjust doub_threshold to lie in the trough between the two peaks of simulated doublet histogram
+    x = coords[:,0]
+    y = coords[:,1]
+
+    called_doubs = doublet_scores_obs > score_threshold
+    print('{}/{} = {:.1f}% of cells are predicted doublets.'.format(sum(called_doubs), len(called_doubs), 
+                                                              100 * sum(called_doubs) / float(len(called_doubs))))
+
+    called_doubs_sim = doublet_scores_sim > score_threshold
+    print('{:.1f}% of doublets are predicted to be detectable.'.format(100 * sum(called_doubs_sim) / float(len(called_doubs_sim))))
+
+
+    fig, axs = plt.subplots(2, 2, figsize = (8, 6))
+
+    ax = axs[0,0]
+    ax.hist(doublet_scores_obs, np.linspace(0, 1, 50), color = 'gray', linewidth = 0, density=True)
+    ax.set_yscale('log')
+    yl = ax.get_ylim()
+    ax.set_ylim(yl)
+    ax.plot([score_threshold, score_threshold], yl, c = 'black', linewidth = 1)
+    ax.set_title('Observed cells')
+    ax.set_xlabel('Doublet score')
+    ax.set_ylabel('Prob. density')
+
+    ax = axs[0,1]
+    ax.hist(doublet_scores_sim, np.linspace(0, 1, 50), color = 'gray', linewidth = 0, density=True)
+    yl = ax.get_ylim()
+    ax.set_ylim(yl)
+    ax.plot([score_threshold, score_threshold], yl, c = 'black', linewidth = 1)
+    ax.set_title('Simulated doublets')
+    ax.set_xlabel('Doublet score')
+    ax.set_ylabel('Prob. density')
+
+
+
+    xl = (x.min() - x.ptp() * .05, x.max() + x.ptp() * 0.05)
+    yl = (y.min() - y.ptp() * .05, y.max() + y.ptp() * 0.05)
+    
+    if order_points:
+        o = np.argsort(doublet_scores_obs)
+    else:
+        o = np.arange(len(doublet_scores_obs)) 
+    
+    ax = axs[1,0]
+    pp = ax.scatter(x[o], y[o], s=marker_size, edgecolors='', c = doublet_scores_obs[o], cmap=darken_cmap(plt.cm.Reds, 0.9))
+    ax.set_xlim(xl)
+    ax.set_ylim(yl)
+    #ax.set_xlabel('Force dim 1')
+    #ax.set_ylabel('Force dim 2')
+
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title('Doublet score')
+
+
+
+    ax = axs[1,1]
+    ax.scatter(x[o], y[o], s=marker_size, edgecolors='', c=doublet_scores_obs[o] > score_threshold, cmap = custom_cmap([[.7,.7,.7], [0,0,0]]))
+    ax.set_xlim(xl)
+    ax.set_ylim(yl)
+    # ax.legend()
+    #ax.set_xlabel('Force dim 1')
+    #ax.set_ylabel('Force dim 2')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title('Predicted doublets')
+    singlet_marker = Line2D([], [], color=[.7,.7,.7], marker='o', markersize=5, label='Singlet', linewidth=0)
+    doublet_marker = Line2D([], [], color=[.0,.0,.0], marker='o', markersize=5, label='Doublet', linewidth=0)
+    ax.legend(handles = [singlet_marker, doublet_marker])
+
+
+
+    fig.tight_layout()
+
+    return fig, axs
