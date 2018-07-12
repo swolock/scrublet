@@ -23,4 +23,5 @@ pip install --upgrade .
 ```
 #### Other doublet detection tools:
 [DoubletFinder](https://github.com/chris-mcginnis-ucsf/DoubletFinder)  
-[DoubletDecon](https://github.com/EDePasquale/DoubletDecon)
+[DoubletDecon](https://github.com/EDePasquale/DoubletDecon)  
+[DoubletDetection](https://github.com/JonathanShor/DoubletDetection)
