@@ -1,7 +1,7 @@
 # Scrublet
-**S**ingle-**C**ell **R**emover of Do**ublet**s 
-Python code for identifying doublets in single-cell RNA-seq data.  
-For details and validation of the method, see our preprint on [bioRxiv](https://www.biorxiv.org/content/early/2018/07/09/357368).
+**S**ingle-**C**ell **R**emover of Do**ublet**s  
+  
+Python code for identifying doublets in single-cell RNA-seq data. For details and validation of the method, see our preprint on [bioRxiv](https://www.biorxiv.org/content/early/2018/07/09/357368).
 
 
 Given a raw counts matrix `E` in `scipy.sparse.csc_matrix` format, with cells as rows and genes as columns, you can calculate a doublet score for each cell with the following command: 
