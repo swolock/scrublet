@@ -62,12 +62,14 @@ def sparse_multiply(E, a):
     w.setdiag(a)
     return w * E
 
-def sparse_zscore(E):
+def sparse_zscore(E, gene_mean=None, gene_stdev=None):
     ''' z-score normalize each column of E '''
 
-    mean_gene = E.mean(0)
-    stdev_gene = np.sqrt(sparse_var(E))
-    return sparse_multiply((E - mean_gene).T, 1/stdev_gene).T
+    if gene_mean is None:
+        gene_stdev = E.mean(0)
+    if gene_stdev is None:
+        gene_stdev = np.sqrt(sparse_var(E))
+    return sparse_multiply((E - gene_mean).T, 1/gene_stdev).T
 
 ########## GENE FILTERING
 
@@ -206,6 +208,7 @@ def tot_counts_norm(E, exclude_dominant_frac = 1, included = [], target_mean = 0
 
 ########## DIMENSIONALITY REDUCTION
 
+
 def get_pca(E, base_ix=[], numpc=50, keep_sparse=False, normalize=True):
     '''
     Run PCA on the counts matrix E, gene-level normalizing if desired
@@ -238,7 +241,7 @@ def get_pca(E, base_ix=[], numpc=50, keep_sparse=False, normalize=True):
     return pca.transform(Z)
 
 
-def preprocess_and_pca(E, total_counts_normalize=True, norm_exclude_abundant_gene_frac=1, min_counts=3, min_cells=5, min_vscore_pctl=85, gene_filter=None, num_pc=50, sparse_pca=False, show_vscore_plot=False):
+def preprocess_and_pca(E, total_counts_normalize=True, norm_exclude_abundant_gene_frac=1, min_counts=3, min_cells=5, min_vscore_pctl=85, gene_filter=None, num_pc=50, sparse_pca=False, zscore_normalize=True, show_vscore_plot=False):
     '''
     Total counts normalize, filter genes, run PCA
     Return PCA coordinates and filtered gene indices
@@ -253,7 +256,7 @@ def preprocess_and_pca(E, total_counts_normalize=True, norm_exclude_abundant_gen
         gene_filter = filter_genes(E, min_vscore_pctl=min_vscore_pctl, min_counts=min_counts, min_cells=min_cells, show_vscore_plot=show_vscore_plot)
 
     print('Using %i genes for PCA' %len(gene_filter))
-    PCdat = get_pca(E[:,gene_filter], numpc=num_pc, keep_sparse=sparse_pca)
+    PCdat = get_pca(E[:,gene_filter], numpc=num_pc, keep_sparse=sparse_pca, normalize=zscore_normalize)
 
     return PCdat, gene_filter
 
@@ -273,7 +276,7 @@ def get_knn_graph(X, k=5, dist_metric='euclidean', approx=False, return_edges=Tr
             approx = False
             print('Could not find library "annoy" for approx. nearest neighbor search')
     if approx:
-        print('Using approximate nearest neighbor search')
+        #print('Using approximate nearest neighbor search')
 
         if dist_metric == 'cosine':
             dist_metric = 'angular'
@@ -291,7 +294,7 @@ def get_knn_graph(X, k=5, dist_metric='euclidean', approx=False, return_edges=Tr
         knn = np.array(knn, dtype=int)
 
     else:
-        print('Using sklearn NearestNeighbors')
+        #print('Using sklearn NearestNeighbors')
 
         if dist_metric == 'cosine':
             nbrs = NearestNeighbors(n_neighbors=k, metric=dist_metric, algorithm='brute').fit(X)
@@ -306,7 +309,7 @@ def get_knn_graph(X, k=5, dist_metric='euclidean', approx=False, return_edges=Tr
                 links.add(tuple(sorted((i,j))))
 
         t_elapse = time.time() - t0
-        print('kNN graph built in %.3f sec' %(t_elapse))
+        #print('kNN graph built in %.3f sec' %(t_elapse))
 
         return links, knn
     return knn
