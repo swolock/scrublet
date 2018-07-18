@@ -28,6 +28,22 @@ def load_genes(filename, delimiter='\t', column=0, skip_rows=0):
     return gene_list
 
 
+def make_genes_unique(orig_gene_list):
+    gene_list = []
+    gene_dict = {}
+
+    for gene in orig_gene_list:
+        if gene in gene_dict:
+            gene_dict[gene] += 1
+            gene_list.append(gene + '__' + str(gene_dict[gene]))
+            if gene_dict[gene] == 2:
+                i = gene_list.index(gene)
+                gene_list[i] = gene + '__1'
+        else:
+           gene_dict[gene] = 1
+           gene_list.append(gene)
+    return gene_list
+
 ########## USEFUL SPARSE FUNCTIONS
 
 def sparse_var(E, axis=0):
@@ -46,12 +62,14 @@ def sparse_multiply(E, a):
     w.setdiag(a)
     return w * E
 
-def sparse_zscore(E):
+def sparse_zscore(E, gene_mean=None, gene_stdev=None):
     ''' z-score normalize each column of E '''
 
-    mean_gene = E.mean(0)
-    stdev_gene = np.sqrt(sparse_var(E))
-    return sparse_multiply((E - mean_gene).T, 1/stdev_gene).T
+    if gene_mean is None:
+        gene_stdev = E.mean(0)
+    if gene_stdev is None:
+        gene_stdev = np.sqrt(sparse_var(E))
+    return sparse_multiply((E - gene_mean).T, 1/gene_stdev).T
 
 ########## GENE FILTERING
 
@@ -175,7 +193,7 @@ def tot_counts_norm(E, exclude_dominant_frac = 1, included = [], target_mean = 0
             wtmp.setdiag(1. / tots)
             included = np.asarray(~(((wtmp * E) > exclude_dominant_frac).sum(axis=0) > 0))[0,:]
             tots_use = E[:,included].sum(axis = 1)
-            print 'Excluded %i genes from normalization' %(np.sum(~included))
+            print('Excluded %i genes from normalization' %(np.sum(~included)))
     else:
         tots_use = E[:,included].sum(axis = 1)
 
@@ -189,6 +207,7 @@ def tot_counts_norm(E, exclude_dominant_frac = 1, included = [], target_mean = 0
     return Enorm.tocsc(), target_mean, included
 
 ########## DIMENSIONALITY REDUCTION
+
 
 def get_pca(E, base_ix=[], numpc=50, keep_sparse=False, normalize=True):
     '''
@@ -222,22 +241,22 @@ def get_pca(E, base_ix=[], numpc=50, keep_sparse=False, normalize=True):
     return pca.transform(Z)
 
 
-def preprocess_and_pca(E, total_counts_normalize=True, norm_exclude_abundant_gene_frac=1, min_counts=3, min_cells=5, min_vscore_pctl=85, gene_filter=None, num_pc=50, sparse_pca=False, show_vscore_plot=False):
+def preprocess_and_pca(E, total_counts_normalize=True, norm_exclude_abundant_gene_frac=1, min_counts=3, min_cells=5, min_vscore_pctl=85, gene_filter=None, num_pc=50, sparse_pca=False, zscore_normalize=True, show_vscore_plot=False):
     '''
     Total counts normalize, filter genes, run PCA
     Return PCA coordinates and filtered gene indices
     '''
 
     if total_counts_normalize:
-        print 'Total count normalizing'
+        print('Total count normalizing')
         E = tot_counts_norm(E, exclude_dominant_frac = norm_exclude_abundant_gene_frac)[0]
 
     if gene_filter is None:
-        print 'Finding highly variable genes'
+        print('Finding highly variable genes')
         gene_filter = filter_genes(E, min_vscore_pctl=min_vscore_pctl, min_counts=min_counts, min_cells=min_cells, show_vscore_plot=show_vscore_plot)
 
-    print 'Using %i genes for PCA' %len(gene_filter)
-    PCdat = get_pca(E[:,gene_filter], numpc=num_pc, keep_sparse=sparse_pca)
+    print('Using %i genes for PCA' %len(gene_filter))
+    PCdat = get_pca(E[:,gene_filter], numpc=num_pc, keep_sparse=sparse_pca, normalize=zscore_normalize)
 
     return PCdat, gene_filter
 
@@ -255,9 +274,9 @@ def get_knn_graph(X, k=5, dist_metric='euclidean', approx=False, return_edges=Tr
             from annoy import AnnoyIndex
         except:
             approx = False
-            print 'Could not find library "annoy" for approx. nearest neighbor search'
+            print('Could not find library "annoy" for approx. nearest neighbor search')
     if approx:
-        print 'Using approximate nearest neighbor search'
+        #print('Using approximate nearest neighbor search')
 
         if dist_metric == 'cosine':
             dist_metric = 'angular'
@@ -265,17 +284,17 @@ def get_knn_graph(X, k=5, dist_metric='euclidean', approx=False, return_edges=Tr
         ncell = X.shape[0]
         annoy_index = AnnoyIndex(npc, metric=dist_metric)
 
-        for i in xrange(ncell):
+        for i in range(ncell):
             annoy_index.add_item(i, list(X[i,:]))
         annoy_index.build(10) # 10 trees
 
         knn = []
-        for iCell in xrange(ncell):
+        for iCell in range(ncell):
             knn.append(annoy_index.get_nns_by_item(iCell, k + 1)[1:])
         knn = np.array(knn, dtype=int)
 
     else:
-        print 'Using sklearn NearestNeighbors'
+        #print('Using sklearn NearestNeighbors')
 
         if dist_metric == 'cosine':
             nbrs = NearestNeighbors(n_neighbors=k, metric=dist_metric, algorithm='brute').fit(X)
@@ -290,7 +309,7 @@ def get_knn_graph(X, k=5, dist_metric='euclidean', approx=False, return_edges=Tr
                 links.add(tuple(sorted((i,j))))
 
         t_elapse = time.time() - t0
-        print 'kNN graph built in %.3f sec' %(t_elapse)
+        #print('kNN graph built in %.3f sec' %(t_elapse))
 
         return links, knn
     return knn
@@ -359,8 +378,8 @@ def get_louvain_clusters(nodes, edges):
 
 def rank_enriched_genes(E, gene_list, cell_mask, min_counts=3, min_cells=3):
     gix = (E[cell_mask,:]>=min_counts).sum(0).A.squeeze() >= min_cells
-    print '%i cells in group' %(sum(cell_mask))
-    print 'Considering %i genes' %(sum(gix))
+    print('%i cells in group' %(sum(cell_mask)))
+    print('Considering %i genes' %(sum(gix)))
     
     gene_list = gene_list[gix]
     
