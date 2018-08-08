@@ -66,7 +66,7 @@ def sparse_zscore(E, gene_mean=None, gene_stdev=None):
     ''' z-score normalize each column of E '''
 
     if gene_mean is None:
-        gene_stdev = E.mean(0)
+        gene_mean = E.mean(0)
     if gene_stdev is None:
         gene_stdev = np.sqrt(sparse_var(E))
     return sparse_multiply((E - gene_mean).T, 1/gene_stdev).T
