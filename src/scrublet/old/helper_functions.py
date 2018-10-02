@@ -6,54 +6,6 @@ from sklearn.decomposition import PCA,TruncatedSVD
 from sklearn.neighbors import NearestNeighbors
 import time
 
-
-def print_optional(string, verbose=True):
-    if verbose:
-        print(string)
-
-def get_umap(X, n_neighbors):
-    import umap
-    return umap.UMAP(n_neighbors=n_neighbors).fit_transform(X) 
-
-def get_tsne(X, angle=0.5, perplexity=30, verbose=False):
-    from sklearn.manifold import TSNE
-    return TSNE(angle=angle, perplexity=perplexity, verbose=verbose).fit_transform(X)
-
-def subsample_counts(E, rate, original_totals):
-    if rate < 1:
-        E.data = np.random.binomial(np.round(E.data).astype(int), rate)
-        current_totals = E.sum(1).A.squeeze()
-        unsampled_orig_totals = original_totals - current_totals
-        unsampled_downsamp_totals = np.random.binomial(np.round(unsampled_orig_totals).astype(int), rate)
-        final_downsamp_totals = current_totals + unsampled_downsamp_totals
-    else:
-        final_downsamp_totals = original_totals
-    return E, final_downsamp_totals
-
-
-########## PREPROCESSING PIPELINE
-
-def matrix_multiply(X, Y):
-    if not type(X) == np.ndarray:
-        if scipy.sparse.issparse(X):
-            X = X.toarray()
-        else:
-            X = np.array(X)
-    if not type(Y) == np.ndarray:
-        if scipy.sparse.issparse(Y):
-            Y = Y.toarray()
-        else:
-            Y = np.array(Y)
-    return np.dot(X,Y)
-
-def filter_columns(X, gene_filter):
-    return X[:,gene_filter]
-
-def log_normalize(X,pseudocount=1):
-    X.data = np.log10(X.data + pseudocount)
-    return X
-
-
 ########## LOADING DATA
 def load_genes(filename, delimiter='\t', column=0, skip_rows=0):
     gene_list = []
@@ -224,7 +176,7 @@ def filter_genes(E, base_ix = [], min_vscore_pctl = 85, min_counts = 3, min_cell
 
 ########## CELL NORMALIZATION
 
-def tot_counts_norm(E, total_counts = None, exclude_dominant_frac = 1, included = [], target_total = None):
+def tot_counts_norm(E, exclude_dominant_frac = 1, included = [], target_mean = 0):
     ''' 
     Cell-level total counts normalization of input counts matrix, excluding overly abundant genes if desired.
     Return normalized counts, average total counts, and (if exclude_dominant_frac < 1) list of genes used to calculate total counts 
@@ -232,30 +184,27 @@ def tot_counts_norm(E, total_counts = None, exclude_dominant_frac = 1, included 
 
     E = E.tocsc()
     ncell = E.shape[0]
-    if total_counts is None:
-        if len(included) == 0:
-            if exclude_dominant_frac == 1:
-                tots_use = E.sum(axis=1)
-            else:
-                tots = E.sum(axis=1)
-                wtmp = scipy.sparse.lil_matrix((ncell, ncell))
-                wtmp.setdiag(1. / tots)
-                included = np.asarray(~(((wtmp * E) > exclude_dominant_frac).sum(axis=0) > 0))[0,:]
-                tots_use = E[:,included].sum(axis = 1)
-                print('Excluded %i genes from normalization' %(np.sum(~included)))
+    if len(included) == 0:
+        if exclude_dominant_frac == 1:
+            tots_use = E.sum(axis=1)
         else:
+            tots = E.sum(axis=1)
+            wtmp = scipy.sparse.lil_matrix((ncell, ncell))
+            wtmp.setdiag(1. / tots)
+            included = np.asarray(~(((wtmp * E) > exclude_dominant_frac).sum(axis=0) > 0))[0,:]
             tots_use = E[:,included].sum(axis = 1)
+            print('Excluded %i genes from normalization' %(np.sum(~included)))
     else:
-        tots_use = total_counts.copy()
+        tots_use = E[:,included].sum(axis = 1)
 
-    if target_total is None:
-        target_total = np.mean(tots_use)
+    if target_mean == 0:
+        target_mean = np.mean(tots_use)
 
     w = scipy.sparse.lil_matrix((ncell, ncell))
-    w.setdiag(float(target_total) / tots_use)
+    w.setdiag(float(target_mean) / tots_use)
     Enorm = w * E
 
-    return Enorm.tocsc()
+    return Enorm.tocsc(), target_mean, included
 
 ########## DIMENSIONALITY REDUCTION
 
@@ -423,7 +372,7 @@ def get_louvain_clusters(nodes, edges):
     G.add_nodes_from(nodes)
     G.add_edges_from(edges)
     
-    return np.array(list(community.best_partition(G).values()))
+    return np.array(community.best_partition(G).values())
 
 ########## GENE ENRICHMENT
 

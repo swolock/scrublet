@@ -1,5 +1,10 @@
-annoy
-matplotlib
 numpy
-scikit-learn
 scipy
+scikit-learn
+scikit-image
+matplotlib
+numba
+cython
+pandas
+annoy
+umap-learn
