@@ -120,8 +120,9 @@ class Scrublet():
         if self.n_neighbors is None:
             self.n_neighbors = int(round(0.5*np.sqrt(self._E_obs.shape[0])))
 
-    # Core Scrublet functions
-    def scrub_doublets(self, synthetic_doublet_umi_subsampling=1.0, use_approx_neighbors=True, distance_metric='euclidean', get_doublet_neighbor_parents=False, min_counts=3, min_cells=3, min_gene_variability_pctl=85, gene_scale='zscore', n_prin_comps=30, verbose=True):
+    ######## Core Scrublet functions ########
+
+    def scrub_doublets(self, synthetic_doublet_umi_subsampling=1.0, use_approx_neighbors=True, distance_metric='euclidean', get_doublet_neighbor_parents=False, min_counts=3, min_cells=3, min_gene_variability_pctl=85, log_transform=False, mean_center=True, normalize_variance=True, n_prin_comps=30, verbose=True):
         ''' Standard pipeline for preprocessing, doublet simulation, and doublet prediction
 
         Automatically sets a threshold for calling doublets, but it's best to check 
@@ -129,7 +130,7 @@ class Scrublet():
         with call_doublets(threshold=new_threhold) if necessary.
 
         Arguments
-        ----------
+        ---------
         synthetic_doublet_umi_subsampling : float, optional (defuault: 1.0) 
             Rate for sampling UMIs when creating synthetic doublets. If 1.0, 
             each doublet is created by simply adding the UMIs from two randomly 
@@ -166,17 +167,20 @@ class Scrublet():
             (in the top min_gene_variability_pctl percentile), as measured by 
             the v-statistic [Klein et al., Cell 2015].
 
-        gene_scale : str, optional (default: 'zscore')
-            Method used to rescale the counts prior to PCA. This also influences the 
-            the donwstream choice of dimensionality reduction (PCA or Truncated SVD). 
-            Valid options for gene_scale are `['zscore', 'variance_only', 'log', 'none']`. 
-            If 'zscore', counts are rescaled such that each gene has mean of 0 and 
-            variance of 1, and `sklearn.decomposition.PCA` is used for dimensionality 
-            reduction. If 'variance_only', genes are rescaled to variance of 1 and
-            `sklearn.decomposition.TruncatedSVD` is used. If 'log', counts are 
-            log-transformed (log10(1+TPM)) and `sklearn.decomposition.TruncatedSVD` is
-            used. If 'none', no rescaling is performed and 
-            `sklearn.decomposition.TruncatedSVD` is used.
+        log_transform : bool, optional (default: False)
+            If True, log-transform the counts matrix (log10(1+TPM)). 
+            `sklearn.decomposition.TruncatedSVD` will be used for dimensionality
+            reduction, unless `mean_center` is True.
+
+        mean_center : bool, optional (default: True)
+            If True, center the data such that each gene has a mean of 0.
+            `sklearn.decomposition.PCA` will be used for dimensionality
+            reduction.
+
+        normalize_variance : bool, optional (default: True)
+            If True, normalize the data such that each gene has a variance of 1.
+            `sklearn.decomposition.TruncatedSVD` will be used for dimensionality
+            reduction, unless `mean_center` is True.
 
         n_prin_comps : int, optional (default: 30)
             Number of principal components used to embed the transcriptomes prior
@@ -186,7 +190,7 @@ class Scrublet():
             If True, print progress updates.
 
         Sets
-        ----------
+        ----
         doublet_scores_obs_, doublet_errors_obs_,
         doublet_scores_sim_, doublet_errors_sim_,
         predicted_doublets_, z_scores_ 
@@ -194,11 +198,7 @@ class Scrublet():
         detectable_doublet_fraction_, overall_doublet_rate_,
         doublet_parents_, doublet_neighbor_parents_ 
         '''
-
-        valid_gene_scale_methods = ['log', 'variance_only', 'zscore', 'none']
-        if gene_scale not in valid_gene_scale_methods:
-            print('Please set `gene_scale` to one of the following: {}'.format(valid_gene_scale_methods))
-            return
+        t0 = time.time()
 
         self._E_sim = None
         self._E_obs_norm = None
@@ -212,23 +212,22 @@ class Scrublet():
 
         print_optional('Simulating doublets...', verbose)
         self.simulate_doublets(sim_doublet_ratio=self.sim_doublet_ratio, synthetic_doublet_umi_subsampling=synthetic_doublet_umi_subsampling)
+        pipeline_normalize(self, postnorm_total=1e6)
+        if log_transform:
+            pipeline_log_transform(self)
+        if mean_center and normalize_variance:
+            pipeline_zscore(self)
+        elif mean_center:
+            pipeline_mean_center(self)
+        elif normalize_variance: 
+            pipeline_normalize_variance(self)
 
-        print_optional('Co-embedding observed and simulated transcriptomes...', verbose)
-        if gene_scale == 'log':
-            pipeline_normalize(self, gene_filter=self._gene_filter, postnorm_total=1e6)
-            pipeline_scale_log(self)
-            pipeline_truncated_svd(self, n_prin_comps=n_prin_comps)
-        elif gene_scale == 'variance_only':
-            pipeline_normalize(self, gene_filter=self._gene_filter)
-            pipeline_scale_stdev(self)
-            pipeline_truncated_svd(self, n_prin_comps=n_prin_comps)
-        elif gene_scale == 'zscore':
-            pipeline_normalize(self, gene_filter=self._gene_filter)
-            pipeline_scale_zscore(self)
+        if mean_center:
+            print_optional('Embedding transcriptomes using PCA...', verbose)
             pipeline_pca(self, n_prin_comps=n_prin_comps)
         else:
-            pipeline_normalize(self, gene_filter=self._gene_filter)
-            pipeline_truncated_svd(self, n_prin_comps=n_prin_comps)
+            print_optional('Embedding transcriptomes using Truncated SVD...', verbose)
+            pipeline_truncated_svd(self, n_prin_comps=n_prin_comps)            
 
         print_optional('Calculating doublet scores...', verbose)
         self.calculate_doublet_scores(
@@ -238,15 +237,18 @@ class Scrublet():
             )
         self.call_doublets(verbose=verbose)
 
+        t1=time.time()
+        print_optional('Elapsed time: {:.1f} seconds'.format(t1 - t0), verbose)
+        return self.doublet_scores_obs_, self.predicted_doublets_
 
-    def simulate_doublets(self, sim_doublet_ratio=2, weight_by_totals=False, synthetic_doublet_umi_subsampling=1.0):
+    def simulate_doublets(self, sim_doublet_ratio=None, synthetic_doublet_umi_subsampling=1.0):
         ''' Simulate doublets by adding the counts of random observed transcriptome pairs.
 
         Arguments
-        ----------
-        sim_doublet_ratio : float, optional (default: 2.0)
+        ---------
+        sim_doublet_ratio : float, optional (default: None)
             Number of doublets to simulate relative to the number of observed 
-            transcriptomes.
+            transcriptomes. If `None`, self.sim_doublet_ratio is used.
 
         synthetic_doublet_umi_subsampling : float, optional (defuault: 1.0) 
             Rate for sampling UMIs when creating synthetic doublets. If 1.0, 
@@ -256,17 +258,21 @@ class Scrublet():
             rate.
 
         Sets
-        ----------
+        ----
         doublet_parents_
         '''
+
+        if sim_doublet_ratio is None:
+            sim_doublet_ratio = self.sim_doublet_ratio
+        else:
+            self.sim_doublet_ratio = sim_doublet_ratio
 
         n_obs = self._E_obs.shape[0]
         n_sim = int(n_obs * sim_doublet_ratio)
         pair_ix = np.random.randint(0, n_obs, size=(n_sim, 2))
         
-        E_filt = self._E_obs[:,self._gene_filter]
-        E1 = E_filt[pair_ix[:,0],:]
-        E2 = E_filt[pair_ix[:,1],:]
+        E1 = self._E_obs[pair_ix[:,0],:]
+        E2 = self._E_obs[pair_ix[:,1],:]
         tots1 = self._total_counts_obs[pair_ix[:,0]]
         tots2 = self._total_counts_obs[pair_ix[:,1]]
         if synthetic_doublet_umi_subsampling < 1:
@@ -281,7 +287,7 @@ class Scrublet():
         ''' Set the manifold coordinates used in k-nearest-neighbor graph construction
 
         Arguments
-        ----------
+        ---------
         manifold_obs: ndarray, shape (n_cells, n_features)
             The single-cell "manifold" coordinates (e.g., PCA coordinates) 
             for observed transcriptomes. Nearest neighbors are found using
@@ -293,7 +299,7 @@ class Scrublet():
             the union of `manifold_obs` (see above) and `manifold_sim`.
 
         Sets
-        ----------
+        ----
         manifold_obs_, manifold_sim_, 
         '''
 
@@ -307,7 +313,7 @@ class Scrublet():
         Requires that manifold_obs_ and manifold_sim_ have already been set.
 
         Arguments
-        ----------
+        ---------
         use_approx_neighbors : bool, optional (default: True)
             Use approximate nearest neighbor method (annoy) for the KNN 
             classifier.
@@ -325,7 +331,7 @@ class Scrublet():
             doublet state.
 
         Sets
-        ----------
+        ----
         doublet_scores_obs_, doublet_scores_sim_, 
         doublet_errors_obs_, doublet_errors_sim_, 
         doublet_neighbor_parents_
@@ -340,7 +346,7 @@ class Scrublet():
             distance_metric=distance_metric,
             get_neighbor_parents=get_doublet_neighbor_parents
             )
-        return
+        return self.doublet_scores_obs_
 
     def _nearest_neighbor_classifier(self, k=40, use_approx_nn=True, distance_metric='euclidean', exp_doub_rate=0.1, stdev_doub_rate=0.03, get_neighbor_parents=False):
         manifold = np.vstack((self.manifold_obs_, self.manifold_sim_))
@@ -401,7 +407,7 @@ class Scrublet():
         ''' Call trancriptomes as doublets or singlets
 
         Arguments
-        ----------
+        ---------
         threshold : float, optional (default: None) 
             Doublet score threshold for calling a transcriptome
             a doublet. If `None`, this is set automatically by looking
@@ -414,7 +420,7 @@ class Scrublet():
             If True, print summary statistics.
 
         Sets
-        ----------
+        ----
         predicted_doublets_, z_scores_, threshold_,
         detected_doublet_rate_, detectable_doublet_fraction, 
         overall_doublet_rate_
@@ -447,9 +453,9 @@ class Scrublet():
             print('\tExpected   = {:.1f}%'.format(100*self.expected_doublet_rate))
             print('\tEstimated  = {:.1f}%'.format(100*self.overall_doublet_rate_))
             
-        return
+        return self.predicted_doublets_
 
-    ######## Viz functions
+    ######## Viz functions ########
 
     def plot_histogram(self, scale_hist_obs='log', scale_hist_sim='linear', fig_size = (8,3)):
         ''' Plot histogram of doublet scores for observed transcriptomes and simulated doublets 
@@ -487,7 +493,6 @@ class Scrublet():
 
     def set_embedding(self, embedding_name, coordinates):
         ''' Add a 2-D embedding for the observed transcriptomes '''
-
         self._embeddings[embedding_name] = coordinates
         return
 
@@ -557,75 +562,6 @@ class Scrublet():
         fig.tight_layout()
 
         return fig, axs
-
-
-def pipeline_normalize(self, postnorm_total=None, gene_filter=None):
-    if postnorm_total is None:
-        postnorm_total = self._total_counts_obs.mean()
-
-    if gene_filter is None:
-        gene_filter = np.arange(self._E_obs.shape[1])
-
-    self._E_obs_norm = tot_counts_norm(self._E_obs[:,gene_filter], target_total=postnorm_total, total_counts=self._total_counts_obs)
-
-    if self._E_sim is not None:
-        if self._E_sim.shape[1] == self._E_obs.shape[1]:
-            self._E_sim_norm = tot_counts_norm(self._E_sim[:,gene_filter], target_total=postnorm_total, total_counts=self._total_counts_sim)
-        elif self._E_sim.shape[1] == self._E_obs_norm.shape[1]:
-            self._E_sim_norm = tot_counts_norm(self._E_sim, target_total=postnorm_total, total_counts=self._total_counts_sim)
-        else:
-            print('ERROR: Incorrect number of columns in simulated doublets counts matrix.')
-    return
-
-def pipeline_get_gene_filter(self, min_counts=3, min_cells=3, min_gene_variability_pctl=85):
-    self._gene_filter = filter_genes(self._E_obs_norm,
-                                        min_counts=min_counts,
-                                        min_cells=min_cells,
-                                        min_vscore_pctl=min_gene_variability_pctl)
-    return
-
-def pipeline_apply_gene_filter(self):
-    self._E_obs_norm = self._E_obs_norm[:,self._gene_filter]
-    if self._E_sim_norm is not None:
-        self._E_sim_norm = self._E_sim_norm[:,self._gene_filter]
-    return
-
-def pipeline_scale_stdev(self):
-    gene_stdevs = np.sqrt(sparse_var(self._E_obs_norm))
-    self._E_obs_norm = sparse_multiply(self._E_obs_norm.T, 1/gene_stdevs).T
-    self._E_sim_norm = sparse_multiply(self._E_sim_norm.T, 1/gene_stdevs).T
-    return 
-
-def pipeline_scale_zscore(self):
-    gene_means = self._E_obs_norm.mean(0)
-    gene_stdevs = np.sqrt(sparse_var(self._E_obs_norm))
-    self._E_obs_norm = np.array(sparse_zscore(self._E_obs_norm, gene_means, gene_stdevs))
-    self._E_sim_norm = np.array(sparse_zscore(self._E_sim_norm, gene_means, gene_stdevs))
-    return
-
-def pipeline_scale_log(self, pseudocount=1):
-    self._E_obs_norm = log_normalize(self._E_obs_norm, pseudocount)
-    self._E_sim_norm = log_normalize(self._E_sim_norm, pseudocount)
-    return
-
-def pipeline_truncated_svd(self, n_prin_comps=30):
-    svd = TruncatedSVD(n_components=n_prin_comps).fit(self._E_obs_norm)
-    self.set_manifold(svd.transform(self._E_obs_norm), svd.transform(self._E_sim_norm)) 
-    return
-    
-def pipeline_pca(self, n_prin_comps=50):
-    if scipy.sparse.issparse(self._E_obs_norm):
-        X_obs = self._E_obs_norm.toarray()
-    else:
-        X_obs = self._E_obs_norm
-    if scipy.sparse.issparse(self._E_sim_norm):
-        X_sim = self._E_sim_norm.toarray()
-    else:
-        X_sim = self._E_sim_norm
-
-    pca = PCA(n_components=n_prin_comps).fit(X_obs)
-    self.set_manifold(pca.transform(X_obs), pca.transform(X_sim)) 
-    return
 
 
 
