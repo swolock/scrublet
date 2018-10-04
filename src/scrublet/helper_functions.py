@@ -439,9 +439,9 @@ def build_adj_mat(edges, n_nodes):
 
 ########## 2-D EMBEDDINGS
 
-def get_umap(X, n_neighbors):
+def get_umap(X, n_neighbors=10, min_dist=0.1, metric='euclidean'):
     import umap
-    return umap.UMAP(n_neighbors=n_neighbors).fit_transform(X) 
+    return umap.UMAP(n_neighbors=n_neighbors, min_dist=min_dist, metric='euclidean').fit_transform(X) 
 
 def get_tsne(X, angle=0.5, perplexity=30, verbose=False):
     from sklearn.manifold import TSNE
