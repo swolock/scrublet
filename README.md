@@ -21,6 +21,10 @@ cd scrublet
 pip install -r requirements.txt
 pip install --upgrade .
 ```
+
+#### Old versions:
+Previous versions can be found [here](./old_versions/).
+
 #### Other doublet detection tools:
 [DoubletFinder](https://github.com/chris-mcginnis-ucsf/DoubletFinder)  
 [DoubletDecon](https://github.com/EDePasquale/DoubletDecon)  
