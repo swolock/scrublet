@@ -1,331 +1,570 @@
 from .helper_functions import *
 from sklearn.decomposition import PCA, TruncatedSVD
+import matplotlib.pyplot as plt
 
-def compute_doublet_scores(E, n_neighbors=50, sim_doublet_ratio=3, expected_doublet_rate = 0.1, use_approx_neighbors=True, total_counts_normalize=True, min_counts=3, min_cells=3, vscore_percentile=85, gene_filter=None, scaling_method = 'zscore', n_prin_comps=30, get_doublet_neighbor_parents = False):
-    ''' Predict cell doublets
+class Scrublet():
+    def __init__(self, counts_matrix, total_counts=None, sim_doublet_ratio=2.0, n_neighbors=None, expected_doublet_rate=0.1, stdev_doublet_rate=0.02):
+        ''' Initialize Scrublet object with counts matrix and doublet prediction parameters
 
-    Given a counts matrix `E`, calculates a doublet score between 0 and 1 by 
-    simulating doublets, performing PCA, building a k-nearest-neighbor graph, 
-    and finding the fraction of each observed transcriptome's neighbors that are
-    simulated doublets. This 
-    
-    Required inputs:
-    - E: 2-D matrix with shape (n_cells, n_genes)
-        scipy.sparse matrix or numpy array containing raw (unnormalized) 
-        transcript counts. E[i,j] is the number of copies of transcript j 
-        detected in cell i.
+        Parameters
+        ----------
+        counts_matrix : scipy sparse matrix or ndarray, shape (n_cells, n_genes)
+            Matrix containing raw (unnormalized) UMI-based transcript counts. 
+            Converted into a scipy.sparse.csc_matrix.
 
-    Optional parameters:
-    - n_neighbors: int (default = 50)
-        Number of neighbors used to construct the kNN graph of observed
-        transcriptomes and simulated doublets.
-    - sim_doublet_ratio: float(default = 3)
-        Number of doublets to simulate relative to the number of observed 
-        transcriptomes.
-    - expected_doublet_rate: float (default = 0.1)
-        The estimated doublet rate for the experiment.
-    - use_approx_neighbors: boolean (default = True)
-        If true, use approximate nearest neighbors algorithm to contstruct the 
-        kNN graph.
-    - total_counts_normalize: boolean (default = True)
-        If true, apply total counts normalization prior to PCA
-    - gene_filter: list (default = None)
-        For gene filtering prior to PCA. List of gene indices (columns of `E`) 
-        to use in PCA.
-    - min_counts and min_cells: float (default = 3 for both)
-        For gene filtering prior to PCA. Keep genes with at least `min_counts` 
-        counts in at least `min_cells` cells. Ignored if `gene_filter` is not
-        `None`.
-    - vscore_percentile: float (default = 85)
-        For gene filtering prior to  PCA. Keep only highly variable genes, i.e.,
-        those in the `vscore_percentile`-th percentile or above. Ignored if 
-        `gene_filter` is not `None`.
-    - scaling_method: str (default = "zscore")
-        Method for gene-level scaling of transcript counts prior to PCA. Options
-        are "zscore", "log", and "none".
-    - n_prin_comps: int (default = 30)
-        Number of principal components to use for embedding cells prior to
-        building kNN graph.
-    - get_doublet_neighbor_parents: boolean (default = False)
-        If true, returns the list of parent cells used to generate each observed
-        transcriptome's doublet neighbors.
+        total_counts : ndarray, shape (n_cells,), optional (default: None)
+            Array of total UMI counts per cell. If `None`, this is calculated
+            as the row sums of `counts_matrix`. 
 
-    Returns: a dictionary with following items:
-    - "doublet_scores_observed_cells": 1-D `array`
-        List of doublet scores for each observed transcriptome
-    - "doublet_scores_simulateed_doublets": 1-D `array`
-        List of doublet scores for each synthetic doublet
-    - "pca_observed_cells": 2-D `array`
-        Principal component embedding of the observed transcriptomes
-    - "pca_simulated_doublets":  
-        Principal component embedding of the simulated doublets
-    - "gene_filter":
-        List of gene indices used for PCA.
-    - "doublet_neighbor_parents": list of numpy arrays
-        `None` if `get_doublet_neighbor_parents` is `False`. Otherwise, entry i
-        is the list (1-D numpy array) of parent cells that generated the doublet 
-        neighbors of cell i. Cells with no doublet neighbors have an empty list.
-    '''
+        sim_doublet_ratio : float, optional (default: 2.0)
+            Number of doublets to simulate relative to the number of observed 
+            transcriptomes.
 
-    # Initialize output: dictionary to store results 
-    # and useful intermediate variables
-    output = {}
+        n_neighbors : int, optional (default: None)
+            Number of neighbors used to construct the KNN graph of observed
+            transcriptomes and simulated doublets. If `None`, this is 
+            set to round(0.5 * sqrt(n_cells))
 
-    # Check that input is valid
-    valid_scaling_methods = ['zscore', 'log', 'none']
-    if not scaling_method in valid_scaling_methods:
-        print('Select one of the following scaling methods:', valid_scaling_methods)
+        expected_doublet_rate : float, optional (default: 0.1)
+            The estimated doublet rate for the experiment.
+
+        stdev_doublet_rate : float, optional (default: 0.02)
+            Uncertainty in the expected doublet rate.
+
+        Attributes
+        ----------
+        predicted_doublets_ : ndarray, shape (n_cells,)
+            Boolean mask of predicted doublets in the observed
+            transcriptomes. 
+
+        doublet_scores_obs_ : ndarray, shape (n_cells,)
+            Doublet scores for observed transcriptomes.
+
+        doublet_scores_sim_ : ndarray, shape (n_doublets,)
+            Doublet scores for simulated doublets. 
+
+        doublet_errors_obs_ : ndarray, shape (n_cells,)
+            Standard error in the doublet scores for observed
+            transcriptomes.
+
+        doublet_errors_sim_ : ndarray, shape (n_doublets,)
+            Standard error in the doublet scores for simulated
+            doublets.
+
+        threshold_: float
+            Doublet score threshold for calling a transcriptome
+            a doublet.
+
+        z_scores_ : ndarray, shape (n_cells,)
+            Z-score conveying confidence in doublet calls. 
+            Z = `(doublet_score_obs_ - threhsold_) / doublet_errors_obs_`
+
+        detected_doublet_rate_: float
+            Fraction of observed transcriptomes that have been called
+            doublets.
+
+        detectable_doublet_fraction_: float
+            Estimated fraction of doublets that are detectable, i.e.,
+            fraction of simulated doublets with doublet scores above
+            `threshold_`
+
+        overall_doublet_rate_: float
+            Estimated overall doublet rate,
+            `detected_doublet_rate_ / detectable_doublet_fraction_`.
+            Should agree (roughly) with `expected_doublet_rate`.
+
+        manifold_obs_: ndarray, shape (n_cells, n_features)
+            The single-cell "manifold" coordinates (e.g., PCA coordinates) 
+            for observed transcriptomes. Nearest neighbors are found using
+            the union of `manifold_obs_` and `manifold_sim_` (see below).
+
+        manifold_sim_: ndarray, shape (n_doublets, n_features)
+            The single-cell "manifold" coordinates (e.g., PCA coordinates) 
+            for simulated doublets. Nearest neighbors are found using
+            the union of `manifold_obs_` (see above) and `manifold_sim_`.
+        
+        doublet_parents_ : ndarray, shape (n_doublets, 2)
+            Indices of the observed transcriptomes used to generate the 
+            simulated doublets.
+
+        doublet_neighbor_parents_ : list, length n_cells
+            A list of arrays of the indices of the doublet neighbors of 
+            each observed transcriptome (the ith entry is an array of 
+            the doublet neighbors of transcriptome i).
+        '''
+
+        if not scipy.sparse.issparse(counts_matrix):
+            counts_matrix = scipy.sparse.csc_matrix(counts_matrix)
+        elif not scipy.sparse.isspmatrix_csc(counts_matrix):
+            counts_matrix = counts_matrix.tocsc()
+
+        # initialize counts matrices
+        self._E_obs = counts_matrix
+        self._E_sim = None
+        self._E_obs_norm = None
+        self._E_sim_norm = None
+
+        if total_counts is None:
+            self._total_counts_obs = self._E_obs.sum(1).A.squeeze()
+        else:
+            self._total_counts_obs = total_counts
+
+        self._gene_filter = np.arange(self._E_obs.shape[1])
+        self._embeddings = {}
+
+        self.sim_doublet_ratio = sim_doublet_ratio
+        self.n_neighbors = n_neighbors
+        self.expected_doublet_rate = expected_doublet_rate
+        self.stdev_doublet_rate = stdev_doublet_rate
+
+        if self.n_neighbors is None:
+            self.n_neighbors = int(round(0.5*np.sqrt(self._E_obs.shape[0])))
+
+    ######## Core Scrublet functions ########
+
+    def scrub_doublets(self, synthetic_doublet_umi_subsampling=1.0, use_approx_neighbors=True, distance_metric='euclidean', get_doublet_neighbor_parents=False, min_counts=3, min_cells=3, min_gene_variability_pctl=85, log_transform=False, mean_center=True, normalize_variance=True, n_prin_comps=30, verbose=True):
+        ''' Standard pipeline for preprocessing, doublet simulation, and doublet prediction
+
+        Automatically sets a threshold for calling doublets, but it's best to check 
+        this by running plot_histogram() afterwards and adjusting threshold 
+        with call_doublets(threshold=new_threhold) if necessary.
+
+        Arguments
+        ---------
+        synthetic_doublet_umi_subsampling : float, optional (defuault: 1.0) 
+            Rate for sampling UMIs when creating synthetic doublets. If 1.0, 
+            each doublet is created by simply adding the UMIs from two randomly 
+            sampled observed transcriptomes. For values less than 1, the 
+            UMI counts are added and then randomly sampled at the specified
+            rate.
+
+        use_approx_neighbors : bool, optional (default: True)
+            Use approximate nearest neighbor method (annoy) for the KNN 
+            classifier.
+
+        distance_metric : str, optional (default: 'euclidean')
+            Distance metric used when finding nearest neighbors. For list of
+            valid values, see the documentation for annoy (if `use_approx_neighbors`
+            is True) or sklearn.neighbors.NearestNeighbors (if `use_approx_neighbors`
+            is False).
+            
+        get_doublet_neighbor_parents : bool, optional (default: False)
+            If True, return the parent transcriptomes that generated the 
+            doublet neighbors of each observed transcriptome. This information can 
+            be used to infer the cell states that generated a given 
+            doublet state.
+
+        min_counts : float, optional (default: 3)
+            Used for gene filtering prior to PCA. Genes expressed at fewer than 
+            `min_counts` in fewer than `min_cells` (see below) are excluded.
+
+        min_cells : int, optional (default: 3)
+            Used for gene filtering prior to PCA. Genes expressed at fewer than 
+            `min_counts` (see above) in fewer than `min_cells` are excluded.
+
+        min_gene_variability_pctl : float, optional (default: 85.0)
+            Used for gene filtering prior to PCA. Keep the most highly variable genes
+            (in the top min_gene_variability_pctl percentile), as measured by 
+            the v-statistic [Klein et al., Cell 2015].
+
+        log_transform : bool, optional (default: False)
+            If True, log-transform the counts matrix (log10(1+TPM)). 
+            `sklearn.decomposition.TruncatedSVD` will be used for dimensionality
+            reduction, unless `mean_center` is True.
+
+        mean_center : bool, optional (default: True)
+            If True, center the data such that each gene has a mean of 0.
+            `sklearn.decomposition.PCA` will be used for dimensionality
+            reduction.
+
+        normalize_variance : bool, optional (default: True)
+            If True, normalize the data such that each gene has a variance of 1.
+            `sklearn.decomposition.TruncatedSVD` will be used for dimensionality
+            reduction, unless `mean_center` is True.
+
+        n_prin_comps : int, optional (default: 30)
+            Number of principal components used to embed the transcriptomes prior
+            to k-nearest-neighbor graph construction.
+
+        verbose : bool, optional (default: True)
+            If True, print progress updates.
+
+        Sets
+        ----
+        doublet_scores_obs_, doublet_errors_obs_,
+        doublet_scores_sim_, doublet_errors_sim_,
+        predicted_doublets_, z_scores_ 
+        threshold_, detected_doublet_rate_,
+        detectable_doublet_fraction_, overall_doublet_rate_,
+        doublet_parents_, doublet_neighbor_parents_ 
+        '''
+        t0 = time.time()
+
+        self._E_sim = None
+        self._E_obs_norm = None
+        self._E_sim_norm = None
+        self._gene_filter = np.arange(self._E_obs.shape[1])
+
+        print_optional('Preprocessing...', verbose)
+        pipeline_normalize(self)
+        pipeline_get_gene_filter(self, min_counts=min_counts, min_cells=min_cells, min_gene_variability_pctl=min_gene_variability_pctl)
+        pipeline_apply_gene_filter(self)
+
+        print_optional('Simulating doublets...', verbose)
+        self.simulate_doublets(sim_doublet_ratio=self.sim_doublet_ratio, synthetic_doublet_umi_subsampling=synthetic_doublet_umi_subsampling)
+        pipeline_normalize(self, postnorm_total=1e6)
+        if log_transform:
+            pipeline_log_transform(self)
+        if mean_center and normalize_variance:
+            pipeline_zscore(self)
+        elif mean_center:
+            pipeline_mean_center(self)
+        elif normalize_variance: 
+            pipeline_normalize_variance(self)
+
+        if mean_center:
+            print_optional('Embedding transcriptomes using PCA...', verbose)
+            pipeline_pca(self, n_prin_comps=n_prin_comps)
+        else:
+            print_optional('Embedding transcriptomes using Truncated SVD...', verbose)
+            pipeline_truncated_svd(self, n_prin_comps=n_prin_comps)            
+
+        print_optional('Calculating doublet scores...', verbose)
+        self.calculate_doublet_scores(
+            use_approx_neighbors=use_approx_neighbors,
+            distance_metric=distance_metric,
+            get_doublet_neighbor_parents=get_doublet_neighbor_parents
+            )
+        self.call_doublets(verbose=verbose)
+
+        t1=time.time()
+        print_optional('Elapsed time: {:.1f} seconds'.format(t1 - t0), verbose)
+        return self.doublet_scores_obs_, self.predicted_doublets_
+
+    def simulate_doublets(self, sim_doublet_ratio=None, synthetic_doublet_umi_subsampling=1.0):
+        ''' Simulate doublets by adding the counts of random observed transcriptome pairs.
+
+        Arguments
+        ---------
+        sim_doublet_ratio : float, optional (default: None)
+            Number of doublets to simulate relative to the number of observed 
+            transcriptomes. If `None`, self.sim_doublet_ratio is used.
+
+        synthetic_doublet_umi_subsampling : float, optional (defuault: 1.0) 
+            Rate for sampling UMIs when creating synthetic doublets. If 1.0, 
+            each doublet is created by simply adding the UMIs from two randomly 
+            sampled observed transcriptomes. For values less than 1, the 
+            UMI counts are added and then randomly sampled at the specified
+            rate.
+
+        Sets
+        ----
+        doublet_parents_
+        '''
+
+        if sim_doublet_ratio is None:
+            sim_doublet_ratio = self.sim_doublet_ratio
+        else:
+            self.sim_doublet_ratio = sim_doublet_ratio
+
+        n_obs = self._E_obs.shape[0]
+        n_sim = int(n_obs * sim_doublet_ratio)
+        pair_ix = np.random.randint(0, n_obs, size=(n_sim, 2))
+        
+        E1 = self._E_obs[pair_ix[:,0],:]
+        E2 = self._E_obs[pair_ix[:,1],:]
+        tots1 = self._total_counts_obs[pair_ix[:,0]]
+        tots2 = self._total_counts_obs[pair_ix[:,1]]
+        if synthetic_doublet_umi_subsampling < 1:
+            self._E_sim, self._total_counts_sim = subsample_counts(E1+E2, synthetic_doublet_umi_subsampling, tots1+tots2)
+        else:
+            self._E_sim = E1+E2
+            self._total_counts_sim = tots1+tots2
+        self.doublet_parents_ = pair_ix
         return
 
-    # Convert counts matrix to sparse format if necessary
-    if not scipy.sparse.issparse(E):
-        print('Converting to scipy.sparse.csc_matrix')
-        E = scipy.sparse.csc_matrix(E)
-    elif not scipy.sparse.isspmatrix_csc(E):
-        print('Converting to scipy.sparse.csc_matrix')
-        E = E.tocsc()
+    def set_manifold(self, manifold_obs, manifold_sim):
+        ''' Set the manifold coordinates used in k-nearest-neighbor graph construction
 
-    # Simulate doublets 
-    print('Simulating doublets')
-    E_doub, parent_ix = simulate_doublets_from_counts(E, sim_doublet_ratio)
+        Arguments
+        ---------
+        manifold_obs: ndarray, shape (n_cells, n_features)
+            The single-cell "manifold" coordinates (e.g., PCA coordinates) 
+            for observed transcriptomes. Nearest neighbors are found using
+            the union of `manifold_obs` and `manifold_sim` (see below).
 
-    # Total counts normalize observed cells and simulated doublets
-    if total_counts_normalize:
-        print('Total counts normalizing')
-        E = tot_counts_norm(E)[0] 
-        E_doub = tot_counts_norm(E_doub, target_mean=1e5)[0]
+        manifold_sim: ndarray, shape (n_doublets, n_features)
+            The single-cell "manifold" coordinates (e.g., PCA coordinates) 
+            for simulated doublets. Nearest neighbors are found using
+            the union of `manifold_obs` (see above) and `manifold_sim`.
 
-    # Filter genes (highly variable, expressed above minimum level)
-    if gene_filter is None:
-        print('Finding highly variable genes')
-        gene_filter = filter_genes(E, min_vscore_pctl=vscore_percentile, min_counts=min_counts, min_cells=min_cells)
-    else:
-        gene_filter = np.array(gene_filter)
+        Sets
+        ----
+        manifold_obs_, manifold_sim_, 
+        '''
 
-    # Total counts normalize observed cells to the same total as doublets
-    if total_counts_normalize:
-        E = tot_counts_norm(E, target_mean=1e5)[0]
-
-    # Apply gene filter
-    print('Filtering genes from {} to {}'.format(E.shape[1], len(gene_filter)))
-    E = E[:, gene_filter]
-    E_doub = E_doub[:, gene_filter]
-    output['gene_filter'] = gene_filter
-
-    # Rescale counts
-    if scaling_method == 'log':
-        print('Applying log normalization')
-        E.data = np.log10(1 + E.data)
-        E_doub.data = np.log10(1 + E_doub.data)
-        # to do: option of TruncatedSVD to preserve sparsity
-        pca = PCA(n_components = n_prin_comps)
-        E_doub = E_doub.toarray()
-        E = E.toarray()
-    elif scaling_method == 'zscore':
-        print('Applying z-score normalization')
-        gene_means = E.mean(0)
-        gene_stdevs = np.sqrt(sparse_var(E))
-        E = sparse_zscore(E, gene_means, gene_stdevs)
-        E_doub = sparse_zscore(E_doub, gene_means, gene_stdevs)
-        pca = PCA(n_components = n_prin_comps)
-    else:
-        # to do: option of TruncatedSVD to preserve sparsity
-        pca = PCA(n_components = n_prin_comps)
-        E_doub = E_doub.toarray()
-        E = E.toarray()
-
-    # Fit PCA to observed cells, then apply same transformation to
-    # simulated doublets.
-    print('Running PCA')
-    pca.fit(E)
-    E_pca = pca.transform(E)
-    E_doub_pca = pca.transform(E_doub)
-    doub_labels = np.concatenate((np.zeros(E_pca.shape[0], dtype=int), 
-                                  np.ones(E_doub_pca.shape[0], dtype=int)))
-
-    output['pca_observed_cells'] = E_pca
-    output['pca_simulated_cells'] = E_doub_pca
-
-    # Calculate doublet scores using k-nearest-neighbor classifier
-    print('Building kNN graph and calculating doublet scores')
-    nn_outs = nearest_neighbor_classifier(np.vstack((E_pca, E_doub_pca)), 
-                                          doub_labels, 
-                                          k=n_neighbors, 
-                                          use_approx_nn=use_approx_neighbors, 
-                                          exp_doub_rate = expected_doublet_rate, 
-                                          get_neighbor_parents = get_doublet_neighbor_parents,
-                                          parent_cells = parent_ix
-                                         ) 
-    output['doublet_scores_observed_cells'] = nn_outs[0]
-    output['doublet_scores_simulated_doublets'] = nn_outs[1]
-    output['doublet_neighbor_parents'] = nn_outs[2]
-    return output
-
-#========================================================================================#
-
-def plot_scrublet_results(coords, doublet_scores_obs, doublet_scores_sim, score_threshold, marker_size=5, order_points=False, scale_hist_obs='log', scale_hist_sim='linear', fig_size = (8,6)):
-
-    import matplotlib.pyplot as plt
-    from matplotlib.lines import Line2D
-
-    called_doubs = doublet_scores_obs > score_threshold
-    called_doubs_sim = doublet_scores_sim > score_threshold
-    predictable_doub_frac = sum(called_doubs_sim) / float(len(called_doubs_sim))
-    called_frac = sum(called_doubs) / float(len(called_doubs))
-
-    print('{}/{} = {:.1f}% of cells are predicted doublets.'.format(sum(called_doubs), len(called_doubs), 
-                                                              100 * called_frac))
-    print('{:.1f}% of doublets are predicted to be detectable.'.format(100 * predictable_doub_frac))
-    print('Predicted overall doublet rate = {:.1f}%'.format(100 * called_frac / predictable_doub_frac))    
-
-    fig, axs = plt.subplots(2, 2, figsize = fig_size)
-
-    ax = axs[0,0]
-    ax.hist(doublet_scores_obs, np.linspace(0, 1, 50), color = 'gray', linewidth = 0, density=True)
-    ax.set_yscale(scale_hist_obs)
-    yl = ax.get_ylim()
-    ax.set_ylim(yl)
-    ax.plot([score_threshold, score_threshold], yl, c = 'black', linewidth = 1)
-    ax.set_title('Observed cells')
-    ax.set_xlabel('Doublet score')
-    ax.set_ylabel('Prob. density')
-
-    ax = axs[0,1]
-    ax.hist(doublet_scores_sim, np.linspace(0, 1, 50), color = 'gray', linewidth = 0, density=True)
-    ax.set_yscale(scale_hist_sim)
-    yl = ax.get_ylim()
-    ax.set_ylim(yl)
-    ax.plot([score_threshold, score_threshold], yl, c = 'black', linewidth = 1)
-    ax.set_title('Simulated doublets')
-    ax.set_xlabel('Doublet score')
-    ax.set_ylabel('Prob. density')
-
-    x = coords[:,0]
-    y = coords[:,1]
-    xl = (x.min() - x.ptp() * .05, x.max() + x.ptp() * 0.05)
-    yl = (y.min() - y.ptp() * .05, y.max() + y.ptp() * 0.05)
+        self.manifold_obs_ = manifold_obs
+        self.manifold_sim_ = manifold_sim
+        return
     
-    if order_points:
-        o = np.argsort(doublet_scores_obs)
-    else:
-        o = np.arange(len(doublet_scores_obs)) 
+    def calculate_doublet_scores(self, use_approx_neighbors=True, distance_metric='euclidean', get_doublet_neighbor_parents=False):
+        ''' Calculate doublet scores for observed transcriptomes and simulated doublets
+
+        Requires that manifold_obs_ and manifold_sim_ have already been set.
+
+        Arguments
+        ---------
+        use_approx_neighbors : bool, optional (default: True)
+            Use approximate nearest neighbor method (annoy) for the KNN 
+            classifier.
+
+        distance_metric : str, optional (default: 'euclidean')
+            Distance metric used when finding nearest neighbors. For list of
+            valid values, see the documentation for annoy (if `use_approx_neighbors`
+            is True) or sklearn.neighbors.NearestNeighbors (if `use_approx_neighbors`
+            is False).
+            
+        get_doublet_neighbor_parents : bool, optional (default: False)
+            If True, return the parent transcriptomes that generated the 
+            doublet neighbors of each observed transcriptome. This information can 
+            be used to infer the cell states that generated a given 
+            doublet state.
+
+        Sets
+        ----
+        doublet_scores_obs_, doublet_scores_sim_, 
+        doublet_errors_obs_, doublet_errors_sim_, 
+        doublet_neighbor_parents_
+
+        '''
+
+        self._nearest_neighbor_classifier(
+            k=self.n_neighbors,
+            exp_doub_rate=self.expected_doublet_rate,
+            stdev_doub_rate=self.stdev_doublet_rate,
+            use_approx_nn=use_approx_neighbors, 
+            distance_metric=distance_metric,
+            get_neighbor_parents=get_doublet_neighbor_parents
+            )
+        return self.doublet_scores_obs_
+
+    def _nearest_neighbor_classifier(self, k=40, use_approx_nn=True, distance_metric='euclidean', exp_doub_rate=0.1, stdev_doub_rate=0.03, get_neighbor_parents=False):
+        manifold = np.vstack((self.manifold_obs_, self.manifold_sim_))
+        doub_labels = np.concatenate((np.zeros(self.manifold_obs_.shape[0], dtype=int), 
+                                      np.ones(self.manifold_sim_.shape[0], dtype=int)))
+
+        n_obs = np.sum(doub_labels == 0)
+        n_sim = np.sum(doub_labels == 1)
+        
+        # Adjust k (number of nearest neighbors) based on the ratio of simulated to observed cells
+        k_adj = int(round(k * (1+n_sim/float(n_obs))))
+        
+        # Find k_adj nearest neighbors
+        neighbors = get_knn_graph(manifold, k=k_adj, dist_metric=distance_metric, approx=use_approx_nn, return_edges=False)
+        
+        # Calculate doublet score based on ratio of simulated cell neighbors vs. observed cell neighbors
+        doub_neigh_mask = doub_labels[neighbors] == 1
+        n_sim_neigh = doub_neigh_mask.sum(1)
+        n_obs_neigh = doub_neigh_mask.shape[1] - n_sim_neigh
+        
+        rho = exp_doub_rate
+        r = n_sim / float(n_obs)
+        nd = n_sim_neigh
+        ns = n_obs_neigh
+        N = k_adj
+        
+        # Bayesian
+        q=(nd+1)/(N+2)
+        Ld = q*rho/r/(1-rho-q*(1-rho-rho/r))
+
+        se_q = np.sqrt(q*(1-q)/(N+3))
+        se_rho = stdev_doub_rate
+
+        se_Ld = q*rho/r / (1-rho-q*(1-rho-rho/r))**2 * np.sqrt((se_q/q*(1-rho))**2 + (se_rho/rho*(1-q))**2)
+
+        self.doublet_scores_obs_ = Ld[doub_labels == 0]
+        self.doublet_scores_sim_ = Ld[doub_labels == 1]
+        self.doublet_errors_obs_ = se_Ld[doub_labels==0]
+        self.doublet_errors_sim_ = se_Ld[doub_labels==1]
+
+        # get parents of doublet neighbors, if requested
+        neighbor_parents = None
+        if get_neighbor_parents:
+            parent_cells = self.doublet_parents_
+            neighbors = neighbors - n_obs
+            neighbor_parents = []
+            for iCell in range(n_obs):
+                this_doub_neigh = neighbors[iCell,:][neighbors[iCell,:] > -1]
+                if len(this_doub_neigh) > 0:
+                    this_doub_neigh_parents = np.unique(parent_cells[this_doub_neigh,:].flatten())
+                    neighbor_parents.append(this_doub_neigh_parents)
+                else:
+                    neighbor_parents.append([])
+            self.doublet_neighbor_parents_ = np.array(neighbor_parents)
+        return
     
-    ax = axs[1,0]
-    pp = ax.scatter(x[o], y[o], s=marker_size, edgecolors='', c = doublet_scores_obs[o], cmap=darken_cmap(plt.cm.Reds, 0.9))
-    ax.set_xlim(xl)
-    ax.set_ylim(yl)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_title('Doublet score')
+    def call_doublets(self, threshold=None, verbose=True):
+        ''' Call trancriptomes as doublets or singlets
 
-    ax = axs[1,1]
-    ax.scatter(x[o], y[o], s=marker_size, edgecolors='', c=doublet_scores_obs[o] > score_threshold, cmap = custom_cmap([[.7,.7,.7], [0,0,0]]))
-    ax.set_xlim(xl)
-    ax.set_ylim(yl)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_title('Predicted doublets')
-    singlet_marker = Line2D([], [], color=[.7,.7,.7], marker='o', markersize=5, label='Singlet', linewidth=0)
-    doublet_marker = Line2D([], [], color=[.0,.0,.0], marker='o', markersize=5, label='Doublet', linewidth=0)
-    ax.legend(handles = [singlet_marker, doublet_marker])
+        Arguments
+        ---------
+        threshold : float, optional (default: None) 
+            Doublet score threshold for calling a transcriptome
+            a doublet. If `None`, this is set automatically by looking
+            for the minimum between the two modes of the `doublet_scores_sim_`
+            histogram. It is best practice to check the threshold visually
+            using the `doublet_scores_sim_` histogram and/or based on 
+            co-localization of predicted doublets in a 2-D embedding.
 
-    fig.tight_layout()
+        verbose : bool, optional (default: True)
+            If True, print summary statistics.
 
-    return fig, axs
+        Sets
+        ----
+        predicted_doublets_, z_scores_, threshold_,
+        detected_doublet_rate_, detectable_doublet_fraction, 
+        overall_doublet_rate_
+        '''
 
-#========================================================================================#
+        if threshold is None:
+            # automatic threshold detection
+            # http://scikit-image.org/docs/dev/api/skimage.filters.html
+            from skimage.filters import threshold_minimum
+            threshold = threshold_minimum(self.doublet_scores_sim_)
 
-def simulate_doublets_from_counts(E, sim_doublet_ratio=1):
-    '''
-    Simulate doublets by summing the counts of random cell pairs.
+            if verbose:
+                print("Automatically set threshold at doublet score = {:.2f}".format(threshold))
 
-    Inputs:
-    E (numpy or scipy matrix of size (num_cells, num_genes)): counts matrix, ideally without total-counts normalization.
-    sim_doublet_ratio (float): number of doublets to simulate, as a fraction of the number of cells in E.
-                          A total of num_sim_doubs = int(sim_doublet_ratio * E[0]) doublets will be simulated.
+        Ld_obs = self.doublet_scores_obs_
+        Ld_sim = self.doublet_scores_sim_
+        se_obs = self.doublet_errors_obs_
+        Z = (Ld_obs - threshold) / se_obs
+        self.predicted_doublets_ = Ld_obs > threshold
+        self.z_scores_ = Z
+        self.threshold_ = threshold
+        self.detected_doublet_rate_ = (Ld_obs>threshold).sum() / float(len(Ld_obs))
+        self.detectable_doublet_fraction_ = (Ld_sim>threshold).sum() / float(len(Ld_sim))
+        self.overall_doublet_rate_ = self.detected_doublet_rate_ / self.detectable_doublet_fraction_
 
-    Returns:
-    - Edoub (scipy sparse CSC matrix of size (num_cells+num_sim_doubs, num_genes)): counts matrix with the simulated doublet data appended to the original data matrix E.
-    - doub_labels (array of size (num_cells+num_sim_doubs)): 0 if observed cell, 1 if simulated doublet
-    - pair_ix (matrix of size(num_sim_doubs, 2)): each row gives the indices of the parent cells from E used to generate the simulated doublet
-    '''
+        if verbose:
+            print('Detected doublet rate = {:.1f}%'.format(100*self.detected_doublet_rate_))
+            print('Estimated detectable doublet fraction = {:.1f}%'.format(100*self.detectable_doublet_fraction_))
+            print('Overall doublet rate:')
+            print('\tExpected   = {:.1f}%'.format(100*self.expected_doublet_rate))
+            print('\tEstimated  = {:.1f}%'.format(100*self.overall_doublet_rate_))
+            
+        return self.predicted_doublets_
 
-    if not scipy.sparse.issparse(E):
-        E = scipy.sparse.csc_matrix(E)
-    elif not scipy.sparse.isspmatrix_csc(E):
-        E = E.tocsc()
+    ######## Viz functions ########
 
-    n_obs = E.shape[0]
-    n_doub = int(n_obs * sim_doublet_ratio)
-    pair_ix = np.random.randint(0, n_obs, size=(n_doub, 2))
-    Edoub = E[pair_ix[:, 0],:] + E[pair_ix[:, 1],:]
+    def plot_histogram(self, scale_hist_obs='log', scale_hist_sim='linear', fig_size = (8,3)):
+        ''' Plot histogram of doublet scores for observed transcriptomes and simulated doublets 
 
-    return Edoub, pair_ix
+        The histogram for simulated doublets is useful for determining the correct doublet 
+        score threshold. To set threshold to a new value, T, run call_doublets(threshold=T).
 
-#========================================================================================#
+        '''
 
-def simulate_doublets_from_pca(PCdat, total_counts=None, sim_doublet_ratio=1):
-    '''
-    Simulate doublets by averaging PCA coordinates of random cell pairs.
-    Average is weighted by total counts of each parent cell, if provided.
+        fig, axs = plt.subplots(1, 2, figsize = fig_size)
 
-    Returns:
-    PCdoub (matrix of size (num_cells+num_sim_doubs, num_pcs)): PCA matrix with the simulated doublet PCA coordinates appended to the original data matrix PCdat.
-    doub_labels (array of size (num_cells+num_sim_doubs)): 0 if observed cell, 1 if simulated doublet
-    pair_ix (matrix of size(num_sim_doubs, 2)): each row gives the indices of the parent cells used to generate the simulated doublet
-    '''
+        ax = axs[0]
+        ax.hist(self.doublet_scores_obs_, np.linspace(0, 1, 50), color='gray', linewidth=0, density=True)
+        ax.set_yscale(scale_hist_obs)
+        yl = ax.get_ylim()
+        ax.set_ylim(yl)
+        ax.plot(self.threshold_ * np.ones(2), yl, c='black', linewidth=1)
+        ax.set_title('Observed transcriptomes')
+        ax.set_xlabel('Doublet score')
+        ax.set_ylabel('Prob. density')
 
-    n_obs = PCdat.shape[0]
-    n_doub = int(n_obs * sim_doublet_ratio)
+        ax = axs[1]
+        ax.hist(self.doublet_scores_sim_, np.linspace(0, 1, 50), color='gray', linewidth=0, density=True)
+        ax.set_yscale(scale_hist_sim)
+        yl = ax.get_ylim()
+        ax.set_ylim(yl)
+        ax.plot(self.threshold_ * np.ones(2), yl, c = 'black', linewidth = 1)
+        ax.set_title('Simulated doublets')
+        ax.set_xlabel('Doublet score')
+        ax.set_ylabel('Prob. density')
 
-    if total_counts is None:
-        total_counts = np.ones(n_obs)
+        fig.tight_layout()
 
-    pair_ix = np.random.randint(0, n_obs, size=(n_doub, 2))
+        return fig, axs
 
-    pair_tots = np.hstack((total_counts[pair_ix[:, 0]][:,None], total_counts[pair_ix[:, 1]][:,None]))
-    pair_tots = np.array(pair_tots, dtype=float)
-    pair_fracs = pair_tots / np.sum(pair_tots, axis=1)[:,None]
+    def set_embedding(self, embedding_name, coordinates):
+        ''' Add a 2-D embedding for the observed transcriptomes '''
+        self._embeddings[embedding_name] = coordinates
+        return
 
-    PCdoub = PCdat[pair_ix[:, 0],:] * pair_fracs[:, 0][:,None] + PCdat[pair_ix[:, 1],:] * pair_fracs[:, 1][:,None]
+    def plot_embedding(self, embedding_name, score='raw', marker_size=5, order_points=False, fig_size=(8,4), color_map=None):
+        ''' Plot doublet predictions on 2-D embedding of observed transcriptomes '''
 
-    PCdoub = np.vstack((PCdat, PCdoub))
-    doub_labels = np.concatenate((np.zeros(n_obs, dtype=int), np.ones(n_doub, dtype=int)))
+        #from matplotlib.lines import Line2D
+        if embedding_name not in self._embeddings:
+            print('Cannot find "{}" in embeddings. First add the embedding using `set_embedding`.'.format(embedding_name))
+            return
 
-    return PCdoub, doub_labels, pair_ix
+        # TO DO: check if self.predicted_doublets exists; plot raw scores only if it doesn't
 
-#========================================================================================#
+        fig, axs = plt.subplots(1, 2, figsize = fig_size)
 
-def nearest_neighbor_classifier(embedding, doub_labels, k=50, use_approx_nn=True, exp_doub_rate = 1.0, get_neighbor_parents = False, parent_cells = None):
-    n_obs = sum(doub_labels == 0)
-    n_sim = sum(doub_labels == 1)
+        x = self._embeddings[embedding_name][:,0]
+        y = self._embeddings[embedding_name][:,1]
+        xl = (x.min() - x.ptp() * .05, x.max() + x.ptp() * 0.05)
+        yl = (y.min() - y.ptp() * .05, y.max() + y.ptp() * 0.05)
 
-    # Adjust k (number of nearest neighbors) based on the ratio of simulated to observed cells
-    k_adj = int(round(k * (1+n_sim/float(n_obs))))
-
-    # Find k_adj nearest neighbors
-    neighbors = get_knn_graph(embedding, k=k_adj, dist_metric='euclidean', approx=use_approx_nn, return_edges = False)
-    
-    # Calculate doublet score based on ratio of simulated cell neighbors vs. observed cell neighbors
-    doub_neigh_mask = doub_labels[neighbors] == 1
-    n_sim_neigh = doub_neigh_mask.sum(1)
-    n_obs_neigh = doub_neigh_mask.shape[1] - n_sim_neigh
-    doub_score = n_sim_neigh / (n_sim_neigh + n_obs_neigh * n_sim / float(n_obs) / exp_doub_rate)
-
-    # get parents of doublet neighbors, if requested
-    neighbor_parents = None
-    if get_neighbor_parents and parent_cells is not None:
-        neighbors = neighbors - n_obs
-        neighbor_parents = []
-        for iCell in range(n_obs):
-            this_doub_neigh = neighbors[iCell,:][neighbors[iCell,:] > -1]
-            if len(this_doub_neigh) > 0:
-                this_doub_neigh_parents = np.unique(parent_cells[this_doub_neigh,:].flatten())
-                neighbor_parents.append(this_doub_neigh_parents)
+        ax = axs[1]
+        if score == 'raw':
+            color_dat = self.doublet_scores_obs_
+            vmin = color_dat.min()
+            vmax = color_dat.max()
+            if color_map is None:
+                cmap_use = darken_cmap(plt.cm.Reds, 0.9)
             else:
-                neighbor_parents.append([])
-        neighbor_parents = np.array(neighbor_parents)
+                cmap_use = color_map
+        elif score == 'zscore':
+            color_dat = self.z_scores_
+            vmin = -color_dat.max()
+            vmax = color_dat.max()
+            if color_map is None:
+                cmap_use = darken_cmap(plt.cm.RdBu_r, 0.9)
+            else:
+                cmap_use = color_map
+        if order_points:
+            o = np.argsort(color_dat)
+        else:
+            o = np.arange(len(color_dat)) 
+        pp = ax.scatter(x[o], y[o], s=marker_size, edgecolors='', c = color_dat[o], 
+            cmap=cmap_use, vmin=vmin, vmax=vmax)
+        ax.set_xlim(xl)
+        ax.set_ylim(yl)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_title('Doublet score')
+        ax.set_xlabel(embedding_name + ' 1')
+        ax.set_ylabel(embedding_name + ' 2')
+        fig.colorbar(pp, ax=ax)
+
+        ax = axs[0]
+        called_doubs = self.predicted_doublets_
+        ax.scatter(x[o], y[o], s=marker_size, edgecolors='', c=called_doubs[o], cmap=custom_cmap([[.7,.7,.7], [0,0,0]]))
+        ax.set_xlim(xl)
+        ax.set_ylim(yl)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_title('Predicted doublets')
+        #singlet_marker = Line2D([], [], color=[.7,.7,.7], marker='o', markersize=5, label='Singlet', linewidth=0)
+        #doublet_marker = Line2D([], [], color=[.0,.0,.0], marker='o', markersize=5, label='Doublet', linewidth=0)
+        #ax.legend(handles = [singlet_marker, doublet_marker])
+        ax.set_xlabel(embedding_name + ' 1')
+        ax.set_ylabel(embedding_name + ' 2')
+
+        fig.tight_layout()
+
+        return fig, axs
+
+
 
     
-    return doub_score[doub_labels == 0], doub_score[doub_labels == 1], neighbor_parents
+
 

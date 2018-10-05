@@ -6,107 +6,6 @@ from sklearn.decomposition import PCA,TruncatedSVD
 from sklearn.neighbors import NearestNeighbors
 import time
 
-########## PREPROCESSING PIPELINE
-
-def print_optional(string, verbose=True):
-    if verbose:
-        print(string)
-    return
-
-def pipeline_normalize(self, postnorm_total=None):
-    ''' Total counts normalization '''
-    if postnorm_total is None:
-        postnorm_total = self._total_counts_obs.mean()
-
-    self._E_obs_norm = tot_counts_norm(self._E_obs, target_total=postnorm_total, total_counts=self._total_counts_obs)
-
-    if self._E_sim is not None:
-        self._E_sim_norm = tot_counts_norm(self._E_sim, target_total=postnorm_total, total_counts=self._total_counts_sim)
-    return
-
-def pipeline_get_gene_filter(self, min_counts=3, min_cells=3, min_gene_variability_pctl=85):
-    ''' Identify highly variable genes expressed above a minimum level '''
-    self._gene_filter = filter_genes(self._E_obs_norm,
-                                        min_counts=min_counts,
-                                        min_cells=min_cells,
-                                        min_vscore_pctl=min_gene_variability_pctl)
-    return
-
-def pipeline_apply_gene_filter(self):
-    if self._E_obs is not None:
-        self._E_obs = self._E_obs[:,self._gene_filter]
-    if self._E_obs_norm is not None:
-        self._E_obs_norm = self._E_obs_norm[:,self._gene_filter]
-    if self._E_sim is not None:
-        self._E_sim = self._E_sim[:,self._gene_filter]
-    if self._E_sim_norm is not None:
-        self._E_sim_norm = self._E_sim_norm[:,self._gene_filter]
-    return
-
-def pipeline_mean_center(self):
-    gene_means = self._E_obs_norm.mean(0)
-    self._E_obs_norm = self._E_obs_norm - gene_means
-    if self._E_sim_norm is not None:
-        self._E_sim_norm = self._E_sim_norm - gene_means
-    return 
-
-def pipeline_normalize_variance(self):
-    gene_stdevs = np.sqrt(sparse_var(self._E_obs_norm))
-    self._E_obs_norm = sparse_multiply(self._E_obs_norm.T, 1/gene_stdevs).T
-    if self._E_sim_norm is not None:
-        self._E_sim_norm = sparse_multiply(self._E_sim_norm.T, 1/gene_stdevs).T
-    return 
-
-def pipeline_zscore(self):
-    gene_means = self._E_obs_norm.mean(0)
-    gene_stdevs = np.sqrt(sparse_var(self._E_obs_norm))
-    self._E_obs_norm = np.array(sparse_zscore(self._E_obs_norm, gene_means, gene_stdevs))
-    if self._E_sim_norm is not None:
-        self._E_sim_norm = np.array(sparse_zscore(self._E_sim_norm, gene_means, gene_stdevs))
-    return
-
-def pipeline_log_transform(self, pseudocount=1):
-    self._E_obs_norm = log_normalize(self._E_obs_norm, pseudocount)
-    if self._E_sim_norm is not None:
-        self._E_sim_norm = log_normalize(self._E_sim_norm, pseudocount)
-    return
-
-def pipeline_truncated_svd(self, n_prin_comps=30):
-    svd = TruncatedSVD(n_components=n_prin_comps).fit(self._E_obs_norm)
-    self.set_manifold(svd.transform(self._E_obs_norm), svd.transform(self._E_sim_norm)) 
-    return
-    
-def pipeline_pca(self, n_prin_comps=50):
-    if scipy.sparse.issparse(self._E_obs_norm):
-        X_obs = self._E_obs_norm.toarray()
-    else:
-        X_obs = self._E_obs_norm
-    if scipy.sparse.issparse(self._E_sim_norm):
-        X_sim = self._E_sim_norm.toarray()
-    else:
-        X_sim = self._E_sim_norm
-
-    pca = PCA(n_components=n_prin_comps).fit(X_obs)
-    self.set_manifold(pca.transform(X_obs), pca.transform(X_sim)) 
-    return
-
-def matrix_multiply(X, Y):
-    if not type(X) == np.ndarray:
-        if scipy.sparse.issparse(X):
-            X = X.toarray()
-        else:
-            X = np.array(X)
-    if not type(Y) == np.ndarray:
-        if scipy.sparse.issparse(Y):
-            Y = Y.toarray()
-        else:
-            Y = np.array(Y)
-    return np.dot(X,Y)
-
-def log_normalize(X,pseudocount=1):
-    X.data = np.log10(X.data + pseudocount)
-    return X
-
 ########## LOADING DATA
 def load_genes(filename, delimiter='\t', column=0, skip_rows=0):
     gene_list = []
@@ -171,18 +70,6 @@ def sparse_zscore(E, gene_mean=None, gene_stdev=None):
     if gene_stdev is None:
         gene_stdev = np.sqrt(sparse_var(E))
     return sparse_multiply((E - gene_mean).T, 1/gene_stdev).T
-
-def subsample_counts(E, rate, original_totals):
-    if rate < 1:
-        E.data = np.random.binomial(np.round(E.data).astype(int), rate)
-        current_totals = E.sum(1).A.squeeze()
-        unsampled_orig_totals = original_totals - current_totals
-        unsampled_downsamp_totals = np.random.binomial(np.round(unsampled_orig_totals).astype(int), rate)
-        final_downsamp_totals = current_totals + unsampled_downsamp_totals
-    else:
-        final_downsamp_totals = original_totals
-    return E, final_downsamp_totals
-
 
 ########## GENE FILTERING
 
@@ -289,7 +176,7 @@ def filter_genes(E, base_ix = [], min_vscore_pctl = 85, min_counts = 3, min_cell
 
 ########## CELL NORMALIZATION
 
-def tot_counts_norm(E, total_counts = None, exclude_dominant_frac = 1, included = [], target_total = None):
+def tot_counts_norm(E, exclude_dominant_frac = 1, included = [], target_mean = 0):
     ''' 
     Cell-level total counts normalization of input counts matrix, excluding overly abundant genes if desired.
     Return normalized counts, average total counts, and (if exclude_dominant_frac < 1) list of genes used to calculate total counts 
@@ -297,32 +184,30 @@ def tot_counts_norm(E, total_counts = None, exclude_dominant_frac = 1, included 
 
     E = E.tocsc()
     ncell = E.shape[0]
-    if total_counts is None:
-        if len(included) == 0:
-            if exclude_dominant_frac == 1:
-                tots_use = E.sum(axis=1)
-            else:
-                tots = E.sum(axis=1)
-                wtmp = scipy.sparse.lil_matrix((ncell, ncell))
-                wtmp.setdiag(1. / tots)
-                included = np.asarray(~(((wtmp * E) > exclude_dominant_frac).sum(axis=0) > 0))[0,:]
-                tots_use = E[:,included].sum(axis = 1)
-                print('Excluded %i genes from normalization' %(np.sum(~included)))
+    if len(included) == 0:
+        if exclude_dominant_frac == 1:
+            tots_use = E.sum(axis=1)
         else:
+            tots = E.sum(axis=1)
+            wtmp = scipy.sparse.lil_matrix((ncell, ncell))
+            wtmp.setdiag(1. / tots)
+            included = np.asarray(~(((wtmp * E) > exclude_dominant_frac).sum(axis=0) > 0))[0,:]
             tots_use = E[:,included].sum(axis = 1)
+            print('Excluded %i genes from normalization' %(np.sum(~included)))
     else:
-        tots_use = total_counts.copy()
+        tots_use = E[:,included].sum(axis = 1)
 
-    if target_total is None:
-        target_total = np.mean(tots_use)
+    if target_mean == 0:
+        target_mean = np.mean(tots_use)
 
     w = scipy.sparse.lil_matrix((ncell, ncell))
-    w.setdiag(float(target_total) / tots_use)
+    w.setdiag(float(target_mean) / tots_use)
     Enorm = w * E
 
-    return Enorm.tocsc()
+    return Enorm.tocsc(), target_mean, included
 
 ########## DIMENSIONALITY REDUCTION
+
 
 def get_pca(E, base_ix=[], numpc=50, keep_sparse=False, normalize=True):
     '''
@@ -437,21 +322,9 @@ def build_adj_mat(edges, n_nodes):
         A[j,i] = 1
     return A.tocsc()
 
-########## 2-D EMBEDDINGS
+########## FORCE LAYOUT
 
-def get_umap(X, n_neighbors=10, min_dist=0.1, metric='euclidean'):
-    import umap
-    return umap.UMAP(n_neighbors=n_neighbors, min_dist=min_dist, metric='euclidean').fit_transform(X) 
-
-def get_tsne(X, angle=0.5, perplexity=30, verbose=False):
-    from sklearn.manifold import TSNE
-    return TSNE(angle=angle, perplexity=perplexity, verbose=verbose).fit_transform(X)
-
-def get_force_layout(X, n_neighbors=5, approx_neighbors=False, n_iter=300, verbose=False):
-    edges = get_knn_graph(X, k=n_neighbors, approx=approx_neighbors, return_edges=True)[0]
-    return run_force_layout(edges, X.shape[0], verbose=verbose)
-
-def run_force_layout(links, n_cells, n_iter=100, edgeWeightInfluence=1, barnesHutTheta=2, scalingRatio=1, gravity=0.05, jitterTolerance=1, verbose=False):
+def get_force_layout(links, n_cells, n_iter=100, edgeWeightInfluence=1, barnesHutTheta=2, scalingRatio=1, gravity=0.05, jitterTolerance=1, verbose=False):
     from fa2 import ForceAtlas2
     import networkx as nx
 
@@ -499,14 +372,14 @@ def get_louvain_clusters(nodes, edges):
     G.add_nodes_from(nodes)
     G.add_edges_from(edges)
     
-    return np.array(list(community.best_partition(G).values()))
+    return np.array(community.best_partition(G).values())
 
 ########## GENE ENRICHMENT
 
-def rank_enriched_genes(E, gene_list, cell_mask, min_counts=3, min_cells=3, verbose=False):
+def rank_enriched_genes(E, gene_list, cell_mask, min_counts=3, min_cells=3):
     gix = (E[cell_mask,:]>=min_counts).sum(0).A.squeeze() >= min_cells
-    print_optional('%i cells in group' %(sum(cell_mask)), verbose)
-    print_optional('Considering %i genes' %(sum(gix)), verbose)
+    print('%i cells in group' %(sum(cell_mask)))
+    print('Considering %i genes' %(sum(gix)))
     
     gene_list = gene_list[gix]
     
