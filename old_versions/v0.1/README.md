@@ -13,7 +13,7 @@ doublet_scores = scrublet_results['doublet_scores_observed_cells']
 
 There are a number of optional parameters that can have major effects on the quality of results. For a typical workflow, including interpretation of predicted doublet scores, see the example [ipython notebook](./examples/10X_PBMC-8k_example.ipynb).
 
-We are also working on a [scanpy](https://github.com/theislab/scanpy) implementation. See https://github.com/swolock/scanpy for a fork implementing Scrublet and the example [here](./examples/180601_scanpy_example.ipynb).
+We are also working on a [scanpy](https://github.com/theislab/scanpy) implementation. See https://github.com/swolock/scanpy for a fork implementing Scrublet and the example [here](./examples/10X_PBMC-8k_scanpy_example.ipynb).
 
 #### To install:
 ```bash
