@@ -16,7 +16,7 @@ doublet_scores, predicted_doublets = scrub.scrub_doublets()
 
 #### Installation:
 ```bash
-git clone https://github.com/swolock/scrublet.git
+git clone https://github.com/AllonKleinLab/scrublet.git
 cd scrublet
 pip install -r requirements.txt
 pip install --upgrade .
