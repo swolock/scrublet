@@ -369,9 +369,9 @@ class Scrublet():
         
         rho = exp_doub_rate
         r = n_sim / float(n_obs)
-        nd = n_sim_neigh
-        ns = n_obs_neigh
-        N = k_adj
+        nd = n_sim_neigh.astype(float)
+        ns = n_obs_neigh.astype(float)
+        N = float(k_adj)
         
         # Bayesian
         q=(nd+1)/(N+2)
@@ -430,28 +430,32 @@ class Scrublet():
             # automatic threshold detection
             # http://scikit-image.org/docs/dev/api/skimage.filters.html
             from skimage.filters import threshold_minimum
-            threshold = threshold_minimum(self.doublet_scores_sim_)
+            try:
+                threshold = threshold_minimum(self.doublet_scores_sim_)
+                if verbose:
+                    print("Automatically set threshold at doublet score = {:.2f}".format(threshold))
 
-            if verbose:
-                print("Automatically set threshold at doublet score = {:.2f}".format(threshold))
+                Ld_obs = self.doublet_scores_obs_
+                Ld_sim = self.doublet_scores_sim_
+                se_obs = self.doublet_errors_obs_
+                Z = (Ld_obs - threshold) / se_obs
+                self.predicted_doublets_ = Ld_obs > threshold
+                self.z_scores_ = Z
+                self.threshold_ = threshold
+                self.detected_doublet_rate_ = (Ld_obs>threshold).sum() / float(len(Ld_obs))
+                self.detectable_doublet_fraction_ = (Ld_sim>threshold).sum() / float(len(Ld_sim))
+                self.overall_doublet_rate_ = self.detected_doublet_rate_ / self.detectable_doublet_fraction_
 
-        Ld_obs = self.doublet_scores_obs_
-        Ld_sim = self.doublet_scores_sim_
-        se_obs = self.doublet_errors_obs_
-        Z = (Ld_obs - threshold) / se_obs
-        self.predicted_doublets_ = Ld_obs > threshold
-        self.z_scores_ = Z
-        self.threshold_ = threshold
-        self.detected_doublet_rate_ = (Ld_obs>threshold).sum() / float(len(Ld_obs))
-        self.detectable_doublet_fraction_ = (Ld_sim>threshold).sum() / float(len(Ld_sim))
-        self.overall_doublet_rate_ = self.detected_doublet_rate_ / self.detectable_doublet_fraction_
-
-        if verbose:
-            print('Detected doublet rate = {:.1f}%'.format(100*self.detected_doublet_rate_))
-            print('Estimated detectable doublet fraction = {:.1f}%'.format(100*self.detectable_doublet_fraction_))
-            print('Overall doublet rate:')
-            print('\tExpected   = {:.1f}%'.format(100*self.expected_doublet_rate))
-            print('\tEstimated  = {:.1f}%'.format(100*self.overall_doublet_rate_))
+                if verbose:
+                    print('Detected doublet rate = {:.1f}%'.format(100*self.detected_doublet_rate_))
+                    print('Estimated detectable doublet fraction = {:.1f}%'.format(100*self.detectable_doublet_fraction_))
+                    print('Overall doublet rate:')
+                    print('\tExpected   = {:.1f}%'.format(100*self.expected_doublet_rate))
+                    print('\tEstimated  = {:.1f}%'.format(100*self.overall_doublet_rate_))
+            except:
+                self.predicted_doublets_ = None
+                if verbose:
+                    print("Warning: failed to automatically identify doublet score threshold. Run `call_doublets` with user-specified threshold.")
             
         return self.predicted_doublets_
 
