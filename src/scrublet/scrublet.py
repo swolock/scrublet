@@ -127,7 +127,7 @@ class Scrublet():
 
         Automatically sets a threshold for calling doublets, but it's best to check 
         this by running plot_histogram() afterwards and adjusting threshold 
-        with call_doublets(threshold=new_threhold) if necessary.
+        with call_doublets(threshold=new_threshold) if necessary.
 
         Arguments
         ---------
