@@ -20,6 +20,12 @@ doublet_scores, predicted_doublets = scrub.scrub_doublets()
 - Visualize the doublet predictions in a 2-D embedding (e.g., UMAP or t-SNE). Predicted doublets should mostly co-localize (possibly in multiple clusters). If they do not, you may need to adjust the doublet score threshold, or change the pre-processing parameters to better resolve the cell states present in your data.
 
 #### Installation:
+To install with PyPI:
+```bash
+pip install scrublet
+```
+
+To install from source:
 ```bash
 git clone https://github.com/AllonKleinLab/scrublet.git
 cd scrublet
