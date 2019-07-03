@@ -71,12 +71,12 @@ def pipeline_log_transform(self, pseudocount=1):
         self._E_sim_norm = log_normalize(self._E_sim_norm, pseudocount)
     return
 
-def pipeline_truncated_svd(self, n_prin_comps=30):
-    svd = TruncatedSVD(n_components=n_prin_comps).fit(self._E_obs_norm)
+def pipeline_truncated_svd(self, n_prin_comps=30, random_state=0):
+    svd = TruncatedSVD(n_components=n_prin_comps, random_state=random_state).fit(self._E_obs_norm)
     self.set_manifold(svd.transform(self._E_obs_norm), svd.transform(self._E_sim_norm)) 
     return
     
-def pipeline_pca(self, n_prin_comps=50):
+def pipeline_pca(self, n_prin_comps=50, random_state=0):
     if scipy.sparse.issparse(self._E_obs_norm):
         X_obs = self._E_obs_norm.toarray()
     else:
@@ -86,7 +86,7 @@ def pipeline_pca(self, n_prin_comps=50):
     else:
         X_sim = self._E_sim_norm
 
-    pca = PCA(n_components=n_prin_comps).fit(X_obs)
+    pca = PCA(n_components=n_prin_comps, random_state=random_state).fit(X_obs)
     self.set_manifold(pca.transform(X_obs), pca.transform(X_sim)) 
     return
 
@@ -172,8 +172,9 @@ def sparse_zscore(E, gene_mean=None, gene_stdev=None):
         gene_stdev = np.sqrt(sparse_var(E))
     return sparse_multiply((E - gene_mean).T, 1/gene_stdev).T
 
-def subsample_counts(E, rate, original_totals):
+def subsample_counts(E, rate, original_totals, random_seed=0):
     if rate < 1:
+        np.random.seed(random_seed)
         E.data = np.random.binomial(np.round(E.data).astype(int), rate)
         current_totals = E.sum(1).A.squeeze()
         unsampled_orig_totals = original_totals - current_totals
@@ -324,7 +325,7 @@ def tot_counts_norm(E, total_counts = None, exclude_dominant_frac = 1, included 
 
 ########## DIMENSIONALITY REDUCTION
 
-def get_pca(E, base_ix=[], numpc=50, keep_sparse=False, normalize=True):
+def get_pca(E, base_ix=[], numpc=50, keep_sparse=False, normalize=True, random_state=0):
     '''
     Run PCA on the counts matrix E, gene-level normalizing if desired
     Return PCA coordinates
@@ -341,7 +342,7 @@ def get_pca(E, base_ix=[], numpc=50, keep_sparse=False, normalize=True):
             Z = sparse_multiply(E.T, 1 / zstd).T
         else:
             Z = E
-        pca = TruncatedSVD(n_components=numpc)
+        pca = TruncatedSVD(n_components=numpc, random_state=random_state)
 
     else:
         if normalize:
@@ -350,7 +351,7 @@ def get_pca(E, base_ix=[], numpc=50, keep_sparse=False, normalize=True):
             Z = sparse_multiply((E - zmean).T, 1/zstd).T
         else:
             Z = E
-        pca = PCA(n_components=numpc)
+        pca = PCA(n_components=numpc, random_state=random_state)
 
     pca.fit(Z[base_ix,:])
     return pca.transform(Z)
@@ -377,7 +378,7 @@ def preprocess_and_pca(E, total_counts_normalize=True, norm_exclude_abundant_gen
 
 ########## GRAPH CONSTRUCTION
 
-def get_knn_graph(X, k=5, dist_metric='euclidean', approx=False, return_edges=True):
+def get_knn_graph(X, k=5, dist_metric='euclidean', approx=False, return_edges=True, random_seed=0):
     '''
     Build k-nearest-neighbor graph
     Return edge list and nearest neighbor matrix
@@ -398,6 +399,7 @@ def get_knn_graph(X, k=5, dist_metric='euclidean', approx=False, return_edges=Tr
         npc = X.shape[1]
         ncell = X.shape[0]
         annoy_index = AnnoyIndex(npc, metric=dist_metric)
+        annoy_index.set_seed(random_seed)
 
         for i in range(ncell):
             annoy_index.add_item(i, list(X[i,:]))
@@ -439,13 +441,13 @@ def build_adj_mat(edges, n_nodes):
 
 ########## 2-D EMBEDDINGS
 
-def get_umap(X, n_neighbors=10, min_dist=0.1, metric='euclidean'):
+def get_umap(X, n_neighbors=10, min_dist=0.1, metric='euclidean', random_state=0):
     import umap
-    return umap.UMAP(n_neighbors=n_neighbors, min_dist=min_dist, metric='euclidean').fit_transform(X) 
+    return umap.UMAP(n_neighbors=n_neighbors, min_dist=min_dist, metric=metric, random_state=random_state).fit_transform(X) 
 
-def get_tsne(X, angle=0.5, perplexity=30, verbose=False):
+def get_tsne(X, angle=0.5, perplexity=30, random_state=0, verbose=False):
     from sklearn.manifold import TSNE
-    return TSNE(angle=angle, perplexity=perplexity, verbose=verbose).fit_transform(X)
+    return TSNE(angle=angle, perplexity=perplexity, random_state=random_state, verbose=verbose).fit_transform(X)
 
 def get_force_layout(X, n_neighbors=5, approx_neighbors=False, n_iter=300, verbose=False):
     edges = get_knn_graph(X, k=n_neighbors, approx=approx_neighbors, return_edges=True)[0]
