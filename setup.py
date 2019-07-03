@@ -7,7 +7,7 @@ setuptools.setup(
     name = "scrublet",
     packages = ['scrublet'],
     package_dir={'': 'src'},
-    version = '0.2',
+    version = '0.2.1',
     description = 'Doublet prediction in single-cell RNA-sequencing data',
     long_description=long_description,
     long_description_content_type="text/markdown",

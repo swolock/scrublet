@@ -3,7 +3,7 @@ from sklearn.decomposition import PCA, TruncatedSVD
 import matplotlib.pyplot as plt
 
 class Scrublet():
-    def __init__(self, counts_matrix, total_counts=None, sim_doublet_ratio=2.0, n_neighbors=None, expected_doublet_rate=0.1, stdev_doublet_rate=0.02):
+    def __init__(self, counts_matrix, total_counts=None, sim_doublet_ratio=2.0, n_neighbors=None, expected_doublet_rate=0.1, stdev_doublet_rate=0.02, random_state=0):
         ''' Initialize Scrublet object with counts matrix and doublet prediction parameters
 
         Parameters
@@ -30,6 +30,10 @@ class Scrublet():
 
         stdev_doublet_rate : float, optional (default: 0.02)
             Uncertainty in the expected doublet rate.
+
+        random_state : int, optional (default: 0)
+            Random state for doublet simulation, approximate
+            nearest neighbor search, and PCA/TruncatedSVD.
 
         Attributes
         ----------
@@ -116,6 +120,7 @@ class Scrublet():
         self.n_neighbors = n_neighbors
         self.expected_doublet_rate = expected_doublet_rate
         self.stdev_doublet_rate = stdev_doublet_rate
+        self.random_state = random_state
 
         if self.n_neighbors is None:
             self.n_neighbors = int(round(0.5*np.sqrt(self._E_obs.shape[0])))
@@ -224,10 +229,10 @@ class Scrublet():
 
         if mean_center:
             print_optional('Embedding transcriptomes using PCA...', verbose)
-            pipeline_pca(self, n_prin_comps=n_prin_comps)
+            pipeline_pca(self, n_prin_comps=n_prin_comps, random_state=self.random_state)
         else:
             print_optional('Embedding transcriptomes using Truncated SVD...', verbose)
-            pipeline_truncated_svd(self, n_prin_comps=n_prin_comps)            
+            pipeline_truncated_svd(self, n_prin_comps=n_prin_comps, random_state=self.random_state)            
 
         print_optional('Calculating doublet scores...', verbose)
         self.calculate_doublet_scores(
@@ -269,6 +274,8 @@ class Scrublet():
 
         n_obs = self._E_obs.shape[0]
         n_sim = int(n_obs * sim_doublet_ratio)
+
+        np.random.seed(self.random_state)
         pair_ix = np.random.randint(0, n_obs, size=(n_sim, 2))
         
         E1 = self._E_obs[pair_ix[:,0],:]
@@ -276,7 +283,7 @@ class Scrublet():
         tots1 = self._total_counts_obs[pair_ix[:,0]]
         tots2 = self._total_counts_obs[pair_ix[:,1]]
         if synthetic_doublet_umi_subsampling < 1:
-            self._E_sim, self._total_counts_sim = subsample_counts(E1+E2, synthetic_doublet_umi_subsampling, tots1+tots2)
+            self._E_sim, self._total_counts_sim = subsample_counts(E1+E2, synthetic_doublet_umi_subsampling, tots1+tots2, random_seed=self.random_state)
         else:
             self._E_sim = E1+E2
             self._total_counts_sim = tots1+tots2
@@ -360,7 +367,7 @@ class Scrublet():
         k_adj = int(round(k * (1+n_sim/float(n_obs))))
         
         # Find k_adj nearest neighbors
-        neighbors = get_knn_graph(manifold, k=k_adj, dist_metric=distance_metric, approx=use_approx_nn, return_edges=False)
+        neighbors = get_knn_graph(manifold, k=k_adj, dist_metric=distance_metric, approx=use_approx_nn, return_edges=False, random_seed=self.random_state)
         
         # Calculate doublet score based on ratio of simulated cell neighbors vs. observed cell neighbors
         doub_neigh_mask = doub_labels[neighbors] == 1
