@@ -86,7 +86,7 @@ def pipeline_pca(self, n_prin_comps=50, random_state=0):
     else:
         X_sim = self._E_sim_norm
 
-    pca = PCA(n_components=n_prin_comps, random_state=random_state).fit(X_obs)
+    pca = PCA(n_components=n_prin_comps, random_state=random_state, svd_solver='arpack').fit(X_obs)
     self.set_manifold(pca.transform(X_obs), pca.transform(X_sim)) 
     return
 
@@ -351,7 +351,7 @@ def get_pca(E, base_ix=[], numpc=50, keep_sparse=False, normalize=True, random_s
             Z = sparse_multiply((E - zmean).T, 1/zstd).T
         else:
             Z = E
-        pca = PCA(n_components=numpc, random_state=random_state)
+        pca = PCA(n_components=numpc, random_state=random_state, svd_solve='arpack')
 
     pca.fit(Z[base_ix,:])
     return pca.transform(Z)
