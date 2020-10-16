@@ -546,7 +546,7 @@ class Scrublet():
             o = np.argsort(color_dat)
         else:
             o = np.arange(len(color_dat)) 
-        pp = ax.scatter(x[o], y[o], s=marker_size, edgecolors='', c = color_dat[o], 
+        pp = ax.scatter(x[o], y[o], s=marker_size, edgecolors=None, c = color_dat[o], 
             cmap=cmap_use, vmin=vmin, vmax=vmax)
         ax.set_xlim(xl)
         ax.set_ylim(yl)
@@ -559,7 +559,7 @@ class Scrublet():
 
         ax = axs[0]
         called_doubs = self.predicted_doublets_
-        ax.scatter(x[o], y[o], s=marker_size, edgecolors='', c=called_doubs[o], cmap=custom_cmap([[.7,.7,.7], [0,0,0]]))
+        ax.scatter(x[o], y[o], s=marker_size, edgecolors=None, c=called_doubs[o], cmap=custom_cmap([[.7,.7,.7], [0,0,0]]))
         ax.set_xlim(xl)
         ax.set_ylim(yl)
         ax.set_xticks([])
