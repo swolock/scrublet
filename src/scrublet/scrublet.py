@@ -127,7 +127,7 @@ class Scrublet():
 
     ######## Core Scrublet functions ########
 
-    def scrub_doublets(self, synthetic_doublet_umi_subsampling=1.0, use_approx_neighbors=True, distance_metric='euclidean', get_doublet_neighbor_parents=False, min_counts=3, min_cells=3, min_gene_variability_pctl=85, log_transform=False, mean_center=True, normalize_variance=True, n_prin_comps=30, verbose=True):
+    def scrub_doublets(self, synthetic_doublet_umi_subsampling=1.0, use_approx_neighbors=True, distance_metric='euclidean', get_doublet_neighbor_parents=False, min_counts=3, min_cells=3, min_gene_variability_pctl=85, log_transform=False, mean_center=True, normalize_variance=True, n_prin_comps=30, svd_solver='arpack', verbose=True):
         ''' Standard pipeline for preprocessing, doublet simulation, and doublet prediction
 
         Automatically sets a threshold for calling doublets, but it's best to check 
@@ -191,6 +191,11 @@ class Scrublet():
             Number of principal components used to embed the transcriptomes prior
             to k-nearest-neighbor graph construction.
 
+        svd_solver : str, optional (default: 'arpack')
+            SVD solver to use. See available options for 
+            `svd_solver` from `sklearn.decomposition.PCA` or
+            `algorithm` from `sklearn.decomposition.TruncatedSVD`
+
         verbose : bool, optional (default: True)
             If True, print progress updates.
 
@@ -229,10 +234,10 @@ class Scrublet():
 
         if mean_center:
             print_optional('Embedding transcriptomes using PCA...', verbose)
-            pipeline_pca(self, n_prin_comps=n_prin_comps, random_state=self.random_state)
+            pipeline_pca(self, n_prin_comps=n_prin_comps, random_state=self.random_state, svd_solver=svd_solver)
         else:
             print_optional('Embedding transcriptomes using Truncated SVD...', verbose)
-            pipeline_truncated_svd(self, n_prin_comps=n_prin_comps, random_state=self.random_state)            
+            pipeline_truncated_svd(self, n_prin_comps=n_prin_comps, random_state=self.random_state, algorithm=svd_solver)            
 
         print_optional('Calculating doublet scores...', verbose)
         self.calculate_doublet_scores(
@@ -546,7 +551,7 @@ class Scrublet():
             o = np.argsort(color_dat)
         else:
             o = np.arange(len(color_dat)) 
-        pp = ax.scatter(x[o], y[o], s=marker_size, edgecolors='', c = color_dat[o], 
+        pp = ax.scatter(x[o], y[o], s=marker_size, edgecolors=None, c = color_dat[o], 
             cmap=cmap_use, vmin=vmin, vmax=vmax)
         ax.set_xlim(xl)
         ax.set_ylim(yl)
@@ -559,7 +564,7 @@ class Scrublet():
 
         ax = axs[0]
         called_doubs = self.predicted_doublets_
-        ax.scatter(x[o], y[o], s=marker_size, edgecolors='', c=called_doubs[o], cmap=custom_cmap([[.7,.7,.7], [0,0,0]]))
+        ax.scatter(x[o], y[o], s=marker_size, edgecolors=None, c=called_doubs[o], cmap=custom_cmap([[.7,.7,.7], [0,0,0]]))
         ax.set_xlim(xl)
         ax.set_ylim(yl)
         ax.set_xticks([])

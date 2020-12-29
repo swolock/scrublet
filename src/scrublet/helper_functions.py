@@ -71,12 +71,12 @@ def pipeline_log_transform(self, pseudocount=1):
         self._E_sim_norm = log_normalize(self._E_sim_norm, pseudocount)
     return
 
-def pipeline_truncated_svd(self, n_prin_comps=30, random_state=0):
-    svd = TruncatedSVD(n_components=n_prin_comps, random_state=random_state).fit(self._E_obs_norm)
+def pipeline_truncated_svd(self, n_prin_comps=30, random_state=0, algorithm='arpack'):
+    svd = TruncatedSVD(n_components=n_prin_comps, random_state=random_state, algorithm=algorithm).fit(self._E_obs_norm)
     self.set_manifold(svd.transform(self._E_obs_norm), svd.transform(self._E_sim_norm)) 
     return
     
-def pipeline_pca(self, n_prin_comps=50, random_state=0):
+def pipeline_pca(self, n_prin_comps=50, random_state=0, svd_solver='arpack'):
     if scipy.sparse.issparse(self._E_obs_norm):
         X_obs = self._E_obs_norm.toarray()
     else:
@@ -86,7 +86,7 @@ def pipeline_pca(self, n_prin_comps=50, random_state=0):
     else:
         X_sim = self._E_sim_norm
 
-    pca = PCA(n_components=n_prin_comps, random_state=random_state).fit(X_obs)
+    pca = PCA(n_components=n_prin_comps, random_state=random_state, svd_solver=svd_solver).fit(X_obs)
     self.set_manifold(pca.transform(X_obs), pca.transform(X_sim)) 
     return
 
@@ -278,8 +278,8 @@ def filter_genes(E, base_ix = [], min_vscore_pctl = 85, min_counts = 3, min_cell
         xTh = x_min * np.exp(np.log(x_max/x_min)*np.linspace(0,1,100))
         yTh = (1 + a)*(1+b) + b * xTh
         plt.figure(figsize=(8, 6));
-        plt.scatter(np.log10(mu_gene), np.log10(FF_gene), c = [.8,.8,.8], alpha = 0.3, edgecolors='');
-        plt.scatter(np.log10(mu_gene)[ix], np.log10(FF_gene)[ix], c = [0,0,0], alpha = 0.3, edgecolors='');
+        plt.scatter(np.log10(mu_gene), np.log10(FF_gene), c = [.8,.8,.8], alpha = 0.3, edgecolors=None);
+        plt.scatter(np.log10(mu_gene)[ix], np.log10(FF_gene)[ix], c = [0,0,0], alpha = 0.3, edgecolors=None);
         plt.plot(np.log10(xTh),np.log10(yTh));
         plt.title(sample_name)
         plt.xlabel('log10(mean)');
@@ -325,7 +325,7 @@ def tot_counts_norm(E, total_counts = None, exclude_dominant_frac = 1, included 
 
 ########## DIMENSIONALITY REDUCTION
 
-def get_pca(E, base_ix=[], numpc=50, keep_sparse=False, normalize=True, random_state=0):
+def get_pca(E, base_ix=[], numpc=50, keep_sparse=False, normalize=True, random_state=0, svd_solver='arpack'):
     '''
     Run PCA on the counts matrix E, gene-level normalizing if desired
     Return PCA coordinates
@@ -338,20 +338,20 @@ def get_pca(E, base_ix=[], numpc=50, keep_sparse=False, normalize=True, random_s
 
     if keep_sparse:
         if normalize:
-            zstd = np.sqrt(sparse_var(E[base_ix,:]))
+            zstd = np.sqrt(sparse_var(E[base_ix, :]))
             Z = sparse_multiply(E.T, 1 / zstd).T
         else:
             Z = E
-        pca = TruncatedSVD(n_components=numpc, random_state=random_state)
+        pca = TruncatedSVD(n_components=numpc, random_state=random_state, algorithm=svd_solver)
 
     else:
         if normalize:
             zmean = E[base_ix,:].mean(0)
-            zstd = np.sqrt(sparse_var(E[base_ix,:]))
-            Z = sparse_multiply((E - zmean).T, 1/zstd).T
+            zstd = np.sqrt(sparse_var(E[base_ix, :]))
+            Z = sparse_multiply((E - zmean).T, 1 / zstd).T
         else:
             Z = E
-        pca = PCA(n_components=numpc, random_state=random_state)
+        pca = PCA(n_components=numpc, random_state=random_state, svd_solver=svd_solver)
 
     pca.fit(Z[base_ix,:])
     return pca.transform(Z)
@@ -365,7 +365,7 @@ def preprocess_and_pca(E, total_counts_normalize=True, norm_exclude_abundant_gen
 
     if total_counts_normalize:
         print('Total count normalizing')
-        E = tot_counts_norm(E, exclude_dominant_frac = norm_exclude_abundant_gene_frac)[0]
+        E = tot_counts_norm(E, exclude_dominant_frac=norm_exclude_abundant_gene_frac)[0]
 
     if gene_filter is None:
         print('Finding highly variable genes')
@@ -550,8 +550,8 @@ def plot_groups(x, y, groups, lim_buffer = 50, saving = False, fig_dir = './', f
         ax = plt.subplot(nrow, ncol, ii+1)
         ix = groups == c
 
-        ax.scatter(x[~ix], y[~ix], s = point_size, c = [.8,.8,.8], edgecolors = '')
-        ax.scatter(x[ix], y[ix], s = point_size, c = [0,0,0], edgecolors = '')
+        ax.scatter(x[~ix], y[~ix], s = point_size, c = [.8,.8,.8], edgecolors=None)
+        ax.scatter(x[ix], y[ix], s = point_size, c = [0,0,0], edgecolors=None)
         ax.set_xticks([])
         ax.set_yticks([])
         ax.set_xlim([min(x) - lim_buffer, max(x) + lim_buffer])
