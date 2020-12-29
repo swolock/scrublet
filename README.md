@@ -27,7 +27,7 @@ pip install scrublet
 
 To install from source:
 ```bash
-git clone https://github.com/AllonKleinLab/scrublet.git
+git clone https://github.com/swolock/scrublet.git
 cd scrublet
 pip install -r requirements.txt
 pip install --upgrade .
